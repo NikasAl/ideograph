@@ -35,6 +35,8 @@ const DEFAULT_SETTINGS: Settings = {
   activeProvider: 'openrouter',
   providerKeys: {},
   activeModel: 'anthropic/claude-sonnet-4',
+  ocrModel: 'google/gemini-2.0-flash-001',
+  vlmModel: 'anthropic/claude-sonnet-4',
   theme: 'system',
   language: 'ru',
   extractionDetail: 'medium',

@@ -5,7 +5,31 @@
 // --- Book ---
 
 export type BookFormat = 'pdf' | 'djvu';
-export type ExtractionMode = 'text' | 'vlm';
+export type ExtractionMode = 'text' | 'ocr' | 'vlm';
+
+export interface ExtractionModeInfo {
+  mode: ExtractionMode;
+  label: string;
+  description: string;
+}
+
+export const EXTRACTION_MODES: ExtractionModeInfo[] = [
+  {
+    mode: 'text',
+    label: 'Текстовый',
+    description: 'Использует текстовый слой PDF напрямую. Быстро и дёшево. Подходит если текст читаемый и формулы корректны.',
+  },
+  {
+    mode: 'ocr',
+    label: 'OCR + Текстовый анализ',
+    description: 'Страница → изображение → Vision LLM конвертирует в Markdown с LaTeX формулами → Text LLM извлекает идеи. Два вызова, но формулы распознаются корректно.',
+  },
+  {
+    mode: 'vlm',
+    label: 'Полный визуальный анализ',
+    description: 'Vision LLM анализирует страницу целиком (изображение). Один вызов, но дороже. Необходим для книг с чертежами, графиками, геометрией.',
+  },
+];
 
 export interface TOCEntry {
   title: string;
@@ -92,10 +116,12 @@ export interface ProviderKeys {
 }
 
 export interface Settings {
-  id?: number; // Dexie auto-increment for single-record table
+  id?: number;
   activeProvider: 'openrouter' | 'z-ai';
   providerKeys: ProviderKeys;
-  activeModel: string;
+  activeModel: string;          // основная модель для извлечения идей (text)
+  ocrModel: string;            // vision модель для OCR → Markdown+LaTeX
+  vlmModel: string;            // vision модель для полного визуального анализа
   theme: 'light' | 'dark' | 'system';
   language: 'ru';
   extractionDetail: 'low' | 'medium' | 'high';
@@ -104,12 +130,14 @@ export interface Settings {
 // --- Page text cache ---
 
 export interface PageTextCache {
-  id?: number; // Dexie auto-increment
+  id?: number;
   bookId: string;
   pageNumber: number;
-  text: string;
+  text: string;                // raw text from text layer
   hasTextLayer: boolean;
-  imageBase64?: string;
+  ocrMarkdown?: string;         // OCR result: markdown with LaTeX
+  imageBase64?: string;         // rendered page image for VLM
+  qualityScore?: number;        // 0-1 text layer quality score
   cachedAt: number;
 }
 
