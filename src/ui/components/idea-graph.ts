@@ -90,10 +90,12 @@ export class IdeaGraphView {
         borderWidthSelected: 4,
       })));
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const edges = new vis.DataSet(ideas.flatMap(idea =>
         idea.relations.map(rel => {
           const es = EDGE_STYLES[rel.type] || { color: '#6B7280', width: 1 };
           return {
+            id: `${idea.id}-${rel.targetId}`,
             from: idea.id,
             to: rel.targetId,
             arrows: rel.type === 'prerequisite' ? 'to' : undefined,
@@ -105,7 +107,8 @@ export class IdeaGraphView {
         }),
       ));
 
-      new vis.Network(canvas, { nodes, edges }, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      new vis.Network(canvas as any, { nodes, edges }, {
         physics: {
           forceAtlas2Based: {
             gravitationalConstant: -80, centralGravity: 0.01,
@@ -115,7 +118,7 @@ export class IdeaGraphView {
           stabilization: { iterations: 150 },
         },
         interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
-        edges: { smooth: { type: 'continuous' } },
+        edges: { smooth: { type: 'continuous' as const, enabled: true, roundness: 0.5 } },
       });
 
       (canvas as HTMLElement).dataset.networkReady = 'true';

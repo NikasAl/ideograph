@@ -1,5 +1,8 @@
 // ============================================================
 // Analysis Panel — page range selector, mode preview, progress
+//
+// Runs the extraction pipeline directly in the tab context.
+// File is read via File System Access API (file-store).
 // ============================================================
 
 import { db, getSettings } from '../../db/index.js';
@@ -7,11 +10,15 @@ import type { Book, ExtractionMode } from '../../db/schema.js';
 import { EXTRACTION_MODES } from '../../db/schema.js';
 import { evaluateTextLayer, getTextPreview } from '../../extraction/mode-detector.js';
 import { extractTextFromPDFPage, renderPDFPageToImage } from '../../extraction/text-extractor.js';
+import { createProvider } from '../../background/ai-client.js';
+import { runPipeline } from '../../extraction/pipeline.js';
+import { getFileHandle, verifyFileHandle, reconnectFileHandle, readFileAsArrayBuffer } from '../utils/file-store.js';
 
 export class AnalysisPanel {
   private container: HTMLElement;
   private bookId: string;
   private selectedMode: ExtractionMode = 'text';
+  private abortController: AbortController | null = null;
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -22,14 +29,30 @@ export class AnalysisPanel {
     const book = await db.books.get(this.bookId);
     if (!book) return;
 
-    // Try to get file handle for preview
-    const fileHandle = await this.getFileHandle();
+    // Try to read file for preview
     let previewHtml = '<p class="preview-unavailable">Нет доступа к файлу для предпросмотра</p>';
     let qualityReport: ReturnType<typeof evaluateTextLayer> | null = null;
 
-    if (fileHandle) {
+    const handle = getFileHandle(this.bookId);
+    if (handle) {
       try {
-        const file = await fileHandle.getFile();
+        // Check permission
+        const hasPermission = await verifyFileHandle(this.bookId);
+        if (!hasPermission) {
+          // Try to request permission
+          const granted = await (handle as unknown as { requestPermission: (opts: { mode: string }) => Promise<string> }).requestPermission({ mode: 'read' });
+          if (granted !== 'granted') {
+            previewHtml = '<p class="preview-unavailable">Разрешение истекло. Нажмите «Переподключить файл».</p>';
+          }
+        }
+      } catch {
+        // Permission check failed — try anyway
+      }
+    }
+
+    if (handle) {
+      try {
+        const file = await handle.getFile();
         const pdfData = await file.arrayBuffer();
         const pageText = await extractTextFromPDFPage(pdfData, 1);
         qualityReport = evaluateTextLayer(pageText.text, book.format);
@@ -98,6 +121,7 @@ export class AnalysisPanel {
           </label>
         </div>
         <div class="analysis-actions">
+          ${!handle ? '<button class="secondary-btn" id="btn-reconnect">🔗 Переподключить файл</button>' : ''}
           <button class="primary-btn" id="btn-start">▶ Запустить</button>
           <button class="secondary-btn" id="btn-cancel" style="display:none">⏹ Отменить</button>
           <button class="secondary-btn" id="btn-close">✕ Закрыть</button>
@@ -126,7 +150,10 @@ export class AnalysisPanel {
   }
 
   private bindEvents(panel: HTMLElement): void {
-    panel.querySelector('#btn-close')?.addEventListener('click', () => panel.remove());
+    panel.querySelector('#btn-close')?.addEventListener('click', () => {
+      this.abortController?.abort();
+      panel.remove();
+    });
 
     // Mode selection
     panel.querySelectorAll('input[name="extraction-mode"]').forEach((radio) => {
@@ -136,6 +163,23 @@ export class AnalysisPanel {
           opt.classList.toggle('selected', (opt.querySelector('input') as HTMLInputElement)?.checked);
         });
       });
+    });
+
+    // Reconnect file button
+    panel.querySelector('#btn-reconnect')?.addEventListener('click', async () => {
+      const handle = await reconnectFileHandle(this.bookId);
+      if (handle) {
+        // Re-render to show preview
+        panel.remove();
+        this.render();
+      }
+    });
+
+    // Cancel button
+    panel.querySelector('#btn-cancel')?.addEventListener('click', () => {
+      this.abortController?.abort();
+      (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'none';
+      (panel.querySelector('#btn-start') as HTMLElement).style.display = 'inline-block';
     });
 
     panel.querySelector('#btn-start')?.addEventListener('click', () => this.startAnalysis(panel));
@@ -148,10 +192,36 @@ export class AnalysisPanel {
 
     if (pageFrom > pageTo) { alert('Начальная страница больше конечной'); return; }
 
+    // Check file access
+    const handle = getFileHandle(this.bookId);
+    if (!handle) {
+      alert('Нет доступа к файлу. Переподключите файл.');
+      return;
+    }
+
+    // Verify permission
+    const hasPermission = await verifyFileHandle(this.bookId);
+    if (!hasPermission) {
+      try {
+        const granted = await (handle as any).requestPermission?.({ mode: 'read' });
+        if (granted !== 'granted') {
+          alert('Нет разрешения на чтение файла. Переподключите файл.');
+          return;
+        }
+      } catch {
+        alert('Не удалось получить разрешение. Переподключите файл.');
+        return;
+      }
+    }
+
+    // Get settings and create AI provider
     const settings = await getSettings();
     const apiKey = settings.providerKeys[settings.activeProvider];
-    if (!apiKey) { alert(`API ключ для ${settings.activeProvider} не настроен`); return; }
+    if (!apiKey) { alert(`API ключ для ${settings.activeProvider} не настроен. Откройте настройки.`); return; }
 
+    const provider = createProvider(settings.activeProvider, apiKey);
+
+    // Show progress UI
     (panel.querySelector('#analysis-progress') as HTMLElement).style.display = 'block';
     (panel.querySelector('#btn-start') as HTMLElement).style.display = 'none';
     (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'inline-block';
@@ -161,21 +231,57 @@ export class AnalysisPanel {
 
     // Show mode info
     const modeLabel = EXTRACTION_MODES.find((m) => m.mode === this.selectedMode)?.label || this.selectedMode;
-    progressText.textContent = `Режим: ${modeLabel}. Отправка запроса...`;
+    progressText.textContent = `Режим: ${modeLabel}. Чтение файла...`;
+
+    // Create abort controller
+    this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'start-analysis',
-        data: { bookId: this.bookId, pageFrom, pageTo, mode: this.selectedMode, detail },
+      // Read file
+      const pdfData = await readFileAsArrayBuffer(this.bookId);
+
+      // Get book info
+      const book = await db.books.get(this.bookId);
+      if (!book) throw new Error('Книга не найдена');
+
+      // Run pipeline directly in tab context
+      const result = await runPipeline({
+        bookId: this.bookId,
+        pageFrom,
+        pageTo,
+        mode: this.selectedMode,
+        pdfData,
+        format: book.format,
+        provider,
+        model: settings.activeModel,
+        ocrModel: settings.ocrModel,
+        vlmModel: settings.vlmModel,
+        detail,
+        signal,
+        onProgress: (msg, pct) => {
+          progressFill.style.width = `${pct}%`;
+          progressText.textContent = msg;
+        },
       });
 
-      if (response?.error) throw new Error(response.error);
-
+      // Done
       progressFill.style.width = '100%';
-      progressText.textContent = 'Анализ завершён!';
-      setTimeout(() => panel.remove(), 1500);
+      const effectiveMode = EXTRACTION_MODES.find((m) => m.mode === result.mode)?.label || result.mode;
+      progressText.textContent = `Готово! ${result.ideas.length} идей, ${result.relations.length} связей. Режим: ${effectiveMode}`;
+
+      // Dispatch event to refresh ideas list after a short delay
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent('ideas-updated'));
+        panel.remove();
+      }, 1500);
     } catch (err) {
-      progressText.textContent = `Ошибка: ${(err as Error).message}`;
+      if ((err as Error).name === 'AbortError') {
+        progressText.textContent = 'Отменено.';
+      } else {
+        progressText.textContent = `Ошибка: ${(err as Error).message}`;
+        console.error('Analysis failed:', err);
+      }
       (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'none';
       (panel.querySelector('#btn-start') as HTMLElement).style.display = 'inline-block';
     }
@@ -185,15 +291,6 @@ export class AnalysisPanel {
     if (score >= 0.7) return 'quality-good';
     if (score >= 0.4) return 'quality-medium';
     return 'quality-bad';
-  }
-
-  private async getFileHandle(): Promise<FileSystemFileHandle | undefined> {
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'get-file-handle', data: { bookId: this.bookId },
-      });
-      return response?.handle;
-    } catch { return undefined; }
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

@@ -3,7 +3,8 @@
 // ============================================================
 
 import { db } from '../../db/index.js';
-import type { Book } from '../../db/schema.js';
+import type { Book, ExtractionMode } from '../../db/schema.js';
+import { storeFileHandle } from '../utils/file-store.js';
 import '../styles/components/book-list.css';
 
 export class BookListView {
@@ -50,7 +51,8 @@ export class BookListView {
 
   private renderBookCard(book: Book): string {
     const formatBadge = book.format === 'pdf' ? 'PDF' : 'DJVU';
-    const modeBadge = book.extractionMode === 'text' ? 'Текст' : 'VLM';
+    const MODE_LABELS: Record<ExtractionMode, string> = { text: 'Текст', ocr: 'OCR', vlm: 'VLM' };
+    const modeBadge = MODE_LABELS[book.extractionMode] || book.extractionMode;
 
     return `
       <div class="book-card" data-book-id="${book.id}">
@@ -119,7 +121,7 @@ export class BookListView {
       const format = name.endsWith('.djvu') || name.endsWith('.djv') ? 'djvu' : 'pdf';
 
       let totalPages = 0;
-      let extractionMode: 'text' | 'vlm' = 'text';
+      let extractionMode: ExtractionMode = 'text';
 
       if (format === 'pdf') {
         const { getPDFPageCount, extractTextFromPDFPage } = await import('../../extraction/text-extractor.js');
@@ -127,8 +129,8 @@ export class BookListView {
         totalPages = await getPDFPageCount(buffer);
         if (totalPages > 0) {
           const { text } = await extractTextFromPDFPage(buffer, 1);
-          const { detectMode } = await import('../../extraction/mode-detector.js');
-          extractionMode = detectMode(text, 'pdf').mode;
+          const { evaluateTextLayer } = await import('../../extraction/mode-detector.js');
+          extractionMode = evaluateTextLayer(text, 'pdf').suggestedMode;
         }
       } else {
         extractionMode = 'vlm';
@@ -150,6 +152,10 @@ export class BookListView {
       };
 
       await db.books.add(book);
+
+      // Store file handle in memory (NOT in IndexedDB — handles are not serializable)
+      storeFileHandle(book.id, handle);
+
       this.render();
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {

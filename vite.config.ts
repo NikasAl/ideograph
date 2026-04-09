@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { crx } from '@crxjs/vite-plugin';
 import { resolve } from 'path';
-import manifest from './public/manifest.json';
+import manifest from './manifest.json';
 
 export default defineConfig({
   plugins: [crx({ manifest })],
@@ -15,8 +15,16 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: resolve(__dirname, 'dist'),
+    emptyOutDir: true,
     sourcemap: process.env.NODE_ENV === 'development',
     minify: process.env.NODE_ENV === 'production' ? 'esbuild' : false,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: 'assets/[name].[ext]',
+      },
+    },
   },
 });

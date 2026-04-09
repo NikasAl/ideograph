@@ -1,13 +1,17 @@
 // ============================================================
 // Extraction Pipeline — orchestrates idea extraction
 // Supports 3 modes: text | ocr | vlm
+//
+// Architecture: pipeline runs in the NEW TAB page context.
+// pdfData (ArrayBuffer) is passed from the caller (analysis-panel),
+// which reads the file via File System Access API.
 // ============================================================
 
 import { db } from '../db/index.js';
-import type { Idea, LLMExtractedIdea, Book, ExtractionMode } from '../db/schema.js';
-import type { AIProvider, ChatMessage, VisionMessage } from '../background/ai-client.js';
-import { evaluateTextLayer, getTextPreview } from './mode-detector.js';
-import { extractTextFromPDFRange, renderPDFPageToImage, getPDFPageCount, extractTextFromPDFPage } from './text-extractor.js';
+import type { Idea, LLMExtractedIdea, ExtractionMode } from '../db/schema.js';
+import type { AIProvider, ChatMessage } from '../background/ai-client.js';
+import { evaluateTextLayer } from './mode-detector.js';
+import { extractTextFromPDFRange, renderPDFPageToImage, extractTextFromPDFPage } from './text-extractor.js';
 import { buildVisionMessage } from './vlm-extractor.js';
 import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DETAIL_INSTRUCTIONS } from './prompts/extract-ideas.js';
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
@@ -18,10 +22,12 @@ export interface PipelineOptions {
   pageFrom: number;
   pageTo: number;
   mode: ExtractionMode;
+  pdfData: ArrayBuffer;       // file content — caller is responsible for reading
+  format: 'pdf' | 'djvu';     // book format for quality evaluation
   provider: AIProvider;
-  model: string;           // text model for idea extraction
-  ocrModel?: string;       // vision model for OCR phase
-  vlmModel?: string;       // vision model for full VLM analysis
+  model: string;               // text model for idea extraction
+  ocrModel?: string;           // vision model for OCR phase
+  vlmModel?: string;           // vision model for full VLM analysis
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
@@ -37,31 +43,35 @@ export interface PipelineResult {
 
 /**
  * Run the full extraction pipeline.
+ *
+ * IMPORTANT: This function runs in the new tab page context.
+ * It does NOT access the file system — pdfData must be provided by the caller.
  */
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, mode, provider, model, detail, signal, onProgress } = options;
+  const {
+    bookId, pageFrom, pageTo, mode, pdfData, format,
+    provider, model, detail, signal, onProgress,
+  } = options;
   const ocrModel = options.ocrModel || model;
   const vlmModel = options.vlmModel || model;
 
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
 
-  const fileHandle = await getFileHandleFromBook(book);
-  if (!fileHandle) throw new Error('Нет доступа к файлу книги. Переподключите файл.');
-
-  const file = await fileHandle.getFile();
-  const pdfData = await file.arrayBuffer();
   const detailInstruction = DETAIL_INSTRUCTIONS[detail];
 
-  // Evaluate text layer (always, for caching and info)
+  // === Phase 0: Evaluate text layer quality (always, for caching and info) ===
   onProgress?.('Оценка текстового слоя...', 5);
   const firstPageText = await extractTextFromPDFPage(pdfData, pageFrom);
-  const qualityReport = evaluateTextLayer(firstPageText.text, book.format);
+  const qualityReport = evaluateTextLayer(firstPageText.text, format);
 
   // Cache text layer info
   await cacheTextLayer(bookId, pageFrom, firstPageText.text, firstPageText.hasTextLayer, qualityReport.score);
 
+  // Determine effective mode: if user chose 'text' but quality is bad, fall back to 'ocr'
   const effectiveMode = mode === 'text' && qualityReport.score < 0.3 ? 'ocr' : mode;
+
+  onProgress?.(`Режим: ${effectiveMode.toUpperCase()}`, 8);
 
   // === MODE: TEXT ===
   if (effectiveMode === 'text') {
@@ -134,7 +144,7 @@ async function runOcrPipeline(opts: {
 }): Promise<PipelineResult> {
   const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport } = opts;
 
-  // Phase 1: OCR — convert each page image to Markdown
+  // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
   const markdownPages: Array<{ page: number; markdown: string }> = [];
 
@@ -232,7 +242,7 @@ async function runVlmPipeline(opts: {
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, vlmModel, pageFrom, pageTo, onProgress, qualityReport });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport });
 }
 
 // ============================================================
@@ -269,9 +279,10 @@ async function finalizeIdeas(opts: {
     aiModel: model,
     provider: provider.name,
     extractedAt: Date.now(),
-    relations: [],
+    relations: [] as import('../db/schema.js').Relation[],
   }));
 
+  // === Pass 2: Build relations between ideas ===
   let relations: PipelineResult['relations'] = [];
   if (ideas.length >= 2) {
     const ideasJson = JSON.stringify(ideas.map((i) => ({
@@ -291,23 +302,39 @@ async function finalizeIdeas(opts: {
       if (sourceIdea) {
         sourceIdea.relations.push({
           targetId: rel.target,
-          type: rel.type as Idea['relations'][0]['type'],
+          type: rel.type as 'prerequisite',
           description: rel.description,
         });
       }
     }
   }
 
+  // === Save to DB ===
   onProgress?.('Сохранение...', 95);
   await db.ideas.bulkPut(ideas);
   const book = await db.books.get(bookId);
   if (book) {
     await db.books.update(bookId, {
       lastAnalyzedPage: Math.max(book.lastAnalyzedPage, pageTo),
-      extractionMode: ideas.length > 0 ? (qualityReport.suggestedMode) : book.extractionMode,
+      extractionMode: qualityReport.suggestedMode,
       updatedAt: Date.now(),
     });
   }
+
+  // === Log analysis ===
+  await db.analysisLog.add({
+    bookId,
+    pageFrom,
+    pageTo,
+    mode: qualityReport.suggestedMode,
+    provider: provider.name,
+    model,
+    ideasCount: ideas.length,
+    relationsCount: relations.length,
+    startedAt: Date.now(),
+    completedAt: Date.now(),
+    status: 'success',
+  });
 
   onProgress?.('Готово!', 100);
   return { ideas, relations, mode: qualityReport.suggestedMode, pagesProcessed: pageTo - pageFrom + 1, textLayerReport: qualityReport };
@@ -375,6 +402,16 @@ async function cacheTextLayer(bookId: string, pageNumber: number, text: string, 
   }
 }
 
+function deduplicateIdeas(ideas: LLMExtractedIdea[]): LLMExtractedIdea[] {
+  const seen = new Set<string>();
+  return ideas.filter((idea) => {
+    const key = idea.title.toLowerCase().trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function parseIdeasResponse(content: string): LLMExtractedIdea[] {
   try {
     const json = JSON.parse(content);
@@ -398,8 +435,8 @@ function normalizeExtractedIdea(raw: Record<string, unknown>): LLMExtractedIdea 
   return {
     title: String(raw.title || 'Без названия'),
     summary: String(raw.summary || ''),
-    type: validateEnum(raw.type, ['definition', 'method', 'theorem', 'insight', 'example', 'analogy'], 'insight'),
-    depth: validateEnum(raw.depth, ['basic', 'medium', 'advanced'], 'medium'),
+    type: validateEnum(raw.type, ['definition', 'method', 'theorem', 'insight', 'example', 'analogy'], 'insight') as LLMExtractedIdea['type'],
+    depth: validateEnum(raw.depth, ['basic', 'medium', 'advanced'], 'medium') as LLMExtractedIdea['depth'],
     importance: clamp(Number(raw.importance) || 3, 1, 5) as LLMExtractedIdea['importance'],
     pages: Array.isArray(raw.pages) ? raw.pages.map(Number) : [],
     quote: raw.quote ? String(raw.quote) : undefined,
@@ -433,9 +470,4 @@ function validateEnum(value: unknown, valid: string[], fallback: string): string
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
-}
-
-async function getFileHandleFromBook(book: Book): Promise<FileSystemFileHandle | undefined> {
-  const response = await chrome.runtime.sendMessage({ type: 'get-file-handle', data: { bookId: book.id } });
-  return response?.handle;
 }

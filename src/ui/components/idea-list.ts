@@ -125,10 +125,10 @@ export class IdeaListView {
 
     this.container.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const id = (btn as HTMLElement).closest('.idea-card')?.dataset.ideaId;
+        const id = (btn.closest('.idea-card') as HTMLElement | null)?.dataset?.ideaId;
         const field = (btn as HTMLElement).dataset.field;
         const val = (btn as HTMLElement).dataset.value;
-        if (id && field && val) { await db.ideas.update(id, { [field]: val }); rerender(); }
+        if (id && field && val) { await db.ideas.update(id, { [field]: val } as any); rerender(); }
       });
     });
 
@@ -146,6 +146,9 @@ export class IdeaListView {
     document.getElementById('btn-analyze')?.addEventListener('click', () => {
       new AnalysisPanel(this.container, this.bookId).render();
     });
+
+    // Listen for analysis completion — re-render ideas
+    document.addEventListener('ideas-updated', rerender, { once: true });
   }
 
   private applyFilters(ideas: Idea[]): Idea[] {
