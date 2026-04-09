@@ -8,6 +8,15 @@ import * as pdfjsLib from 'pdfjs-dist';
 // chrome.runtime.getURL resolves to chrome-extension://<id>/pdf.worker.min.mjs
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.min.mjs');
 
+/**
+ * Copy ArrayBuffer before passing to PDF.js.
+ * PDF.js 4.x with Web Worker detaches (transfers) the ArrayBuffer on first use.
+ * Passing the same buffer twice causes "Cannot perform Construct on a detached ArrayBuffer".
+ */
+function copyData(pdfData: ArrayBuffer): Uint8Array {
+  return new Uint8Array(pdfData.slice(0));
+}
+
 export interface ExtractedText {
   text: string;
   hasTextLayer: boolean;
@@ -26,7 +35,7 @@ export async function extractTextFromPDFPage(
   pdfData: ArrayBuffer,
   pageNumber: number, // 1-based
 ): Promise<ExtractedText> {
-  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: copyData(pdfData) }).promise;
   const page = await pdf.getPage(pageNumber);
   const textContent = await page.getTextContent();
 
@@ -50,9 +59,11 @@ export async function extractTextFromPDFRange(
   fromPage: number,
   toPage: number,
 ): Promise<ExtractedText[]> {
+  // Load the PDF document once and reuse for all pages in range
+  const pdf = await pdfjsLib.getDocument({ data: copyData(pdfData) }).promise;
   const results: ExtractedText[] = [];
   for (let p = fromPage; p <= toPage; p++) {
-    const result = await extractTextFromPDFPage(pdfData, p);
+    const result = await extractTextFromPDFPageFromDoc(pdf, p);
     results.push(result);
   }
   return results;
@@ -67,7 +78,7 @@ export async function renderPDFPageToImage(
   pageNumber: number,
   scale: number = 1.5,
 ): Promise<string> {
-  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: copyData(pdfData) }).promise;
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale });
 
@@ -84,8 +95,31 @@ export async function renderPDFPageToImage(
  * Get total page count of a PDF.
  */
 export async function getPDFPageCount(pdfData: ArrayBuffer): Promise<number> {
-  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: copyData(pdfData) }).promise;
   return pdf.numPages;
+}
+
+/**
+ * Extract text from a single page using an already-loaded PDF document.
+ * Used by extractTextFromPDFRange to avoid re-parsing the same PDF.
+ */
+async function extractTextFromPDFPageFromDoc(
+  pdf: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>,
+  pageNumber: number,
+): Promise<ExtractedText> {
+  const page = await pdf.getPage(pageNumber);
+  const textContent = await page.getTextContent();
+
+  const textItems = textContent.items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((item: any) => item.str && typeof item.str === 'string')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((item: any) => item.str as string);
+
+  const text = textItems.join(' ').replace(/\s+/g, ' ').trim();
+  const hasTextLayer = textItems.length > 0 && text.length > 10;
+
+  return { text, hasTextLayer };
 }
 
 /**
