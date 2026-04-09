@@ -4,8 +4,9 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 
-// PDF.js worker setup — use inline worker for extension compatibility
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// PDF.js worker — file is in public/ and gets copied to dist/ root.
+// chrome.runtime.getURL resolves to chrome-extension://<id>/pdf.worker.min.mjs
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.min.mjs');
 
 export interface ExtractedText {
   text: string;
