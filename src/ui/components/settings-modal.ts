@@ -113,6 +113,7 @@ export class SettingsModal {
           </section>
         </div>
         <div class="modal-footer">
+          <button class="secondary-btn" id="btn-cancel">Отменить</button>
           <button class="primary-btn" id="btn-save">💾 Сохранить</button>
         </div>
       </div>`;
@@ -124,25 +125,14 @@ export class SettingsModal {
   private close(): void { this.modal?.remove(); this.modal = null; }
 
   private bindEvents(current: Settings): void {
-    // Only close via explicit buttons — prevent accidental close on paste/click
+    // Only close via explicit buttons — no overlay click close to prevent
+    // accidental closing when pasting, focusing inputs, or context menus
     this.modal?.querySelector('#btn-close')?.addEventListener('click', () => this.close());
+    this.modal?.querySelector('#btn-cancel')?.addEventListener('click', () => this.close());
 
-    // Close only when clicking the dark overlay OUTSIDE the modal card.
-    // Use mousedown + mouseup pair: if mousedown started inside .modal, don't close.
-    let mouseDownInside = false;
-
-    this.modal?.addEventListener('mousedown', (e) => {
-      // Track if the click started inside the .modal card
-      const modalCard = this.modal?.querySelector('.modal');
-      mouseDownInside = modalCard?.contains(e.target as Node) ?? false;
-    }, true);
-
-    this.modal?.addEventListener('mouseup', (e) => {
-      // Only close if: mouse was on overlay (not inside card) AND released on overlay
-      if (e.target === this.modal && !mouseDownInside) {
-        this.close();
-      }
-      mouseDownInside = false;
+    // Prevent any click inside the modal card from closing
+    this.modal?.querySelector('.modal')?.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
     }, true);
 
     // Preset buttons — stop propagation to prevent any bubbling issues

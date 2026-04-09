@@ -4,7 +4,7 @@
 
 import { db } from '../../db/index.js';
 import type { Book, ExtractionMode } from '../../db/schema.js';
-import { storeFileHandle } from '../utils/file-store.js';
+import { storeFileHandle, hasFileHandle, reconnectFileHandleWithCheck } from '../utils/file-store.js';
 import '../styles/components/book-list.css';
 
 export class BookListView {
@@ -53,20 +53,24 @@ export class BookListView {
     const formatBadge = book.format === 'pdf' ? 'PDF' : 'DJVU';
     const MODE_LABELS: Record<ExtractionMode, string> = { text: 'Текст', ocr: 'OCR', vlm: 'VLM' };
     const modeBadge = MODE_LABELS[book.extractionMode] || book.extractionMode;
+    const isDisconnected = !hasFileHandle(book.id);
 
     return `
-      <div class="book-card" data-book-id="${book.id}">
+      <div class="book-card ${isDisconnected ? 'book-card-disconnected' : ''}" data-book-id="${book.id}">
         <div class="book-card-header">
           <span class="format-badge ${book.format}">${formatBadge}</span>
           <span class="mode-badge">${modeBadge}</span>
+          ${isDisconnected ? '<span class="disconnected-badge" title="Файл отключён после перезагрузки расширения">⚠️ Нет доступа</span>' : ''}
         </div>
         <h3 class="book-title">${this.esc(book.title || 'Без названия')}</h3>
         <p class="book-author">${this.esc(book.author || 'Неизвестный автор')}</p>
         <div class="book-meta">
           <span>📄 ${book.totalPages} стр.</span>
+          ${isDisconnected ? '<span class="disconnected-hint">Перезагрузите расширение → переподключите файл</span>' : ''}
         </div>
         <div class="book-actions">
           <button class="secondary-btn btn-select-book" data-book-id="${book.id}">Открыть идеи</button>
+          ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите тот же PDF/DJVU файл повторно">🔗 Подключить файл</button>` : ''}
           <button class="icon-btn btn-open-reader" data-book-id="${book.id}" data-page="1" title="Открыть в ридере">📖</button>
           <button class="icon-btn btn-remove-book" data-book-id="${book.id}" title="Удалить">🗑️</button>
         </div>
@@ -78,10 +82,36 @@ export class BookListView {
     document.getElementById('btn-add-book')?.addEventListener('click', () => this.addBook());
 
     this.container.querySelectorAll('.btn-select-book').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const bookId = (btn as HTMLElement).dataset.bookId;
-        if (bookId) {
-          document.dispatchEvent(new CustomEvent('book-selected', { detail: { bookId } }));
+        if (!bookId) return;
+
+        // If file handle is missing, prompt to reconnect first
+        if (!hasFileHandle(bookId)) {
+          const book = await db.books.get(bookId);
+          const handle = await reconnectFileHandleWithCheck(bookId, book?.filePath);
+          if (!handle) {
+            // User cancelled — don't navigate to ideas
+            return;
+          }
+          // Update the card visually
+          this.render();
+        }
+
+        document.dispatchEvent(new CustomEvent('book-selected', { detail: { bookId } }));
+      });
+    });
+
+    // Reconnect buttons on book cards
+    this.container.querySelectorAll('.btn-reconnect-book').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const bookId = (btn as HTMLElement).dataset.bookId;
+        const expectedName = (btn as HTMLElement).dataset.fileName;
+        if (!bookId) return;
+
+        const handle = await reconnectFileHandleWithCheck(bookId, expectedName || undefined);
+        if (handle) {
+          this.render(); // Re-render to update card state
         }
       });
     });

@@ -12,7 +12,7 @@ import { evaluateTextLayer, evaluateTextLayerMultiple, getTextPreview } from '..
 import { extractTextFromPDFPage, renderPDFPageToImage } from '../../extraction/text-extractor.js';
 import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { runPipeline } from '../../extraction/pipeline.js';
-import { getFileHandle, verifyFileHandle, reconnectFileHandle, readFileAsArrayBuffer } from '../utils/file-store.js';
+import { getFileHandle, verifyFileHandle, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 
 export class AnalysisPanel {
   private container: HTMLElement;
@@ -162,7 +162,7 @@ export class AnalysisPanel {
           </label>
         </div>
         <div class="analysis-actions">
-          ${!handle ? '<button class="secondary-btn" id="btn-reconnect">🔗 Переподключить файл</button>' : ''}
+          <button class="secondary-btn" id="btn-reconnect" title="Выберите PDF/DJVU файл повторно">🔗 Переподключить файл</button>
           <button class="primary-btn" id="btn-start">▶ Запустить</button>
           <button class="secondary-btn" id="btn-cancel" style="display:none">⏹ Отменить</button>
           <button class="secondary-btn" id="btn-close">✕ Закрыть</button>
@@ -210,9 +210,10 @@ export class AnalysisPanel {
     // Re-preview button
     panel.querySelector('#btn-repreview')?.addEventListener('click', () => this.repreview(panel));
 
-    // Reconnect file button
+    // Reconnect file button — always available
     panel.querySelector('#btn-reconnect')?.addEventListener('click', async () => {
-      const handle = await reconnectFileHandle(this.bookId);
+      const book = await db.books.get(this.bookId);
+      const handle = await reconnectFileHandleWithCheck(this.bookId, book?.filePath);
       if (handle) {
         panel.remove();
         this.render();

@@ -102,3 +102,65 @@
   flex: 1;
   text-align: center;
 }
+
+/* Disconnected book card — file handle lost after extension reload */
+.book-card-disconnected {
+  border-color: #f59e0b;
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.book-card-disconnected:hover {
+  border-color: #d97706;
+}
+
+.disconnected-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+[data-theme="dark"] .disconnected-badge {
+  background: #451a03;
+  color: #fbbf24;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.disconnected-hint {
+  font-size: 11px;
+  color: #b45309;
+  font-style: italic;
+}
+
+[data-theme="dark"] .disconnected-hint {
+  color: #fbbf24;
+}
+
+.btn-reconnect-book {
+  background: #fef3c7 !important;
+  color: #92400e !important;
+  border-color: #f59e0b !important;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .btn-reconnect-book {
+  background: #451a03 !important;
+  color: #fbbf24 !important;
+  border-color: #b45309 !important;
+}
+
+.btn-reconnect-book:hover {
+  background: #fde68a !important;
+}
+
+[data-theme="dark"] .btn-reconnect-book:hover {
+  background: #78350f !important;
+}

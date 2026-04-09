@@ -78,6 +78,39 @@ export async function reconnectFileHandle(bookId: string): Promise<FileSystemFil
 }
 
 /**
+ * Prompt user to pick a file and verify it matches the expected file name.
+ * Warns if the file name doesn't match but allows proceeding.
+ * Returns the new handle or null if cancelled.
+ */
+export async function reconnectFileHandleWithCheck(
+  bookId: string,
+  expectedFileName?: string,
+): Promise<FileSystemFileHandle | null> {
+  try {
+    const [handle] = await (window as unknown as { showOpenFilePicker: (opts?: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker({
+      types: [
+        { description: 'PDF/DJVU книги', accept: { 'application/pdf': ['.pdf'], 'image/vnd.djvu': ['.djvu', '.djv'] } },
+      ],
+    });
+    const file = await handle.getFile();
+
+    // If we know the expected file name, warn if it doesn't match
+    if (expectedFileName && file.name !== expectedFileName) {
+      const proceed = confirm(
+        `Выбран файл «${file.name}», а ожидался «${expectedFileName}».
+Подключить выбранный файл?`,
+      );
+      if (!proceed) return null;
+    }
+
+    fileHandleStore.set(bookId, handle);
+    return handle;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Read file content as ArrayBuffer using stored handle.
  */
 export async function readFileAsArrayBuffer(bookId: string): Promise<ArrayBuffer> {
