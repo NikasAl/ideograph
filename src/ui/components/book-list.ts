@@ -4,7 +4,7 @@
 
 import { db } from '../../db/index.js';
 import type { Book, ExtractionMode } from '../../db/schema.js';
-import { storeFileHandle, hasFileHandle, reconnectFileHandleWithCheck } from '../utils/file-store.js';
+import { storeFileHandle, hasFileHandle, ensureFileAccess, reconnectFileHandleWithCheck, deleteStoredHandle } from '../utils/file-store.js';
 import '../styles/components/book-list.css';
 
 export class BookListView {
@@ -60,17 +60,16 @@ export class BookListView {
         <div class="book-card-header">
           <span class="format-badge ${book.format}">${formatBadge}</span>
           <span class="mode-badge">${modeBadge}</span>
-          ${isDisconnected ? '<span class="disconnected-badge" title="Файл отключён после перезагрузки расширения">⚠️ Нет доступа</span>' : ''}
+          ${isDisconnected ? '<span class="disconnected-badge" title="Файл не подключён">⚠️ Подключите файл</span>' : ''}
         </div>
         <h3 class="book-title">${this.esc(book.title || 'Без названия')}</h3>
         <p class="book-author">${this.esc(book.author || 'Неизвестный автор')}</p>
         <div class="book-meta">
           <span>📄 ${book.totalPages} стр.</span>
-          ${isDisconnected ? '<span class="disconnected-hint">Перезагрузите расширение → переподключите файл</span>' : ''}
         </div>
         <div class="book-actions">
           <button class="secondary-btn btn-select-book" data-book-id="${book.id}">Открыть идеи</button>
-          ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите тот же PDF/DJVU файл повторно">🔗 Подключить файл</button>` : ''}
+          ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите PDF/DJVU файл">🔗 Подключить файл</button>` : ''}
           <button class="icon-btn btn-open-reader" data-book-id="${book.id}" data-page="1" title="Открыть в ридере">📖</button>
           <button class="icon-btn btn-remove-book" data-book-id="${book.id}" title="Удалить">🗑️</button>
         </div>
@@ -86,16 +85,16 @@ export class BookListView {
         const bookId = (btn as HTMLElement).dataset.bookId;
         if (!bookId) return;
 
-        // If file handle is missing, prompt to reconnect first
-        if (!hasFileHandle(bookId)) {
+        // Ensure file access: restore from IndexedDB if needed, request permission if prompted
+        const access = await ensureFileAccess(bookId);
+        if (access === null) {
+          // No handle at all — prompt user to pick the file
           const book = await db.books.get(bookId);
           const handle = await reconnectFileHandleWithCheck(bookId, book?.filePath);
-          if (!handle) {
-            // User cancelled — don't navigate to ideas
-            return;
-          }
-          // Update the card visually
-          this.render();
+          if (!handle) return; // User cancelled
+        } else if (access === 'denied') {
+          alert('Доступ к файлу запрещён. Переподключите через кнопку «🔗 Подключить файл».');
+          return;
         }
 
         document.dispatchEvent(new CustomEvent('book-selected', { detail: { bookId } }));
@@ -130,6 +129,7 @@ export class BookListView {
         if (bookId && confirm('Удалить книгу и все её идеи?')) {
           await db.ideas.where('bookId').equals(bookId).delete();
           await db.books.delete(bookId);
+          await deleteStoredHandle(bookId);
           this.render();
         }
       });
@@ -174,7 +174,6 @@ export class BookListView {
         format: format as 'pdf' | 'djvu',
         extractionMode,
         filePath: file.name,
-        fileHandleStored: 1,
         tableOfContents: [],
         lastAnalyzedPage: 0,
         createdAt: Date.now(),
@@ -183,8 +182,8 @@ export class BookListView {
 
       await db.books.add(book);
 
-      // Store file handle in memory (NOT in IndexedDB — handles are not serializable)
-      storeFileHandle(book.id, handle);
+      // Store file handle in memory AND IndexedDB (persists across reloads)
+      await storeFileHandle(book.id, handle);
 
       this.render();
     } catch (err) {

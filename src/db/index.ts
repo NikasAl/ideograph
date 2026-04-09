@@ -5,6 +5,7 @@ import type {
   Settings,
   PageTextCache,
   AnalysisLog,
+  FileHandleRecord,
 } from './schema.js';
 
 class IdeographDB extends Dexie {
@@ -13,6 +14,7 @@ class IdeographDB extends Dexie {
   settings!: Table<Settings, number>;
   pageCache!: Table<PageTextCache, number>;
   analysisLog!: Table<AnalysisLog, number>;
+  fileHandles!: Table<FileHandleRecord, number>;
 
   constructor() {
     super('IdeographDB');
@@ -23,6 +25,11 @@ class IdeographDB extends Dexie {
       settings: '++id',
       pageCache: '++id, [bookId+pageNumber], bookId',
       analysisLog: '++id, bookId, startedAt',
+    });
+
+    // v2: add fileHandles table for persisting FileSystemFileHandle
+    this.version(2).stores({
+      fileHandles: '++id, bookId',
     });
   }
 }
@@ -54,4 +61,25 @@ export async function getSettings(): Promise<Settings> {
 export async function updateSettings(partial: Partial<Settings>): Promise<void> {
   const current = await getSettings();
   await db.settings.update(current.id!, partial);
+}
+
+// ---- File handle persistence helpers ----
+
+export async function saveFileHandle(bookId: string, handle: FileSystemFileHandle): Promise<void> {
+  const existing = await db.fileHandles.where('bookId').equals(bookId).first();
+  if (existing) {
+    await db.fileHandles.update(existing.id!, { handle: handle as unknown, savedAt: Date.now() });
+  } else {
+    await db.fileHandles.add({ bookId, handle: handle as unknown, savedAt: Date.now() });
+  }
+}
+
+export async function loadFileHandle(bookId: string): Promise<FileSystemFileHandle | null> {
+  const record = await db.fileHandles.where('bookId').equals(bookId).first();
+  if (!record) return null;
+  return record.handle as FileSystemFileHandle;
+}
+
+export async function removeFileHandle(bookId: string): Promise<void> {
+  await db.fileHandles.where('bookId').equals(bookId).delete();
 }

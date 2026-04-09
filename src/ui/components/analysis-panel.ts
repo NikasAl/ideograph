@@ -12,7 +12,7 @@ import { evaluateTextLayer, evaluateTextLayerMultiple, getTextPreview } from '..
 import { extractTextFromPDFPage, renderPDFPageToImage } from '../../extraction/text-extractor.js';
 import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { runPipeline } from '../../extraction/pipeline.js';
-import { getFileHandle, verifyFileHandle, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
+import { getFileHandle, verifyFileHandle, ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 
 export class AnalysisPanel {
   private container: HTMLElement;
@@ -37,23 +37,11 @@ export class AnalysisPanel {
     let previewHtml = '<p class="preview-unavailable">Нет доступа к файлу для предпросмотра</p>';
     let qualityReport: ReturnType<typeof evaluateTextLayer> | null = null;
 
+    // Ensure file access — restore from IndexedDB if needed, request permission if prompted
+    const access = await ensureFileAccess(this.bookId);
     const handle = getFileHandle(this.bookId);
-    if (handle) {
-      try {
-        const hasPermission = await verifyFileHandle(this.bookId);
-        if (!hasPermission) {
-          try {
-            const granted = await (handle as unknown as { requestPermission: (opts: { mode: string }) => Promise<string> }).requestPermission({ mode: 'read' });
-            if (granted !== 'granted') {
-              previewHtml = '<p class="preview-unavailable">Разрешение истекло. Нажмите «Переподключить файл».</p>';
-            }
-          } catch { /* try anyway */ }
-        }
-      } catch { /* Permission check failed — try anyway */ }
-    }
 
-    // Try to load PDF data for preview
-    if (handle) {
+    if (access === 'granted' && handle) {
       try {
         const file = await handle.getFile();
         this.pdfData = await file.arrayBuffer();
@@ -320,26 +308,19 @@ export class AnalysisPanel {
 
     if (pageFrom > pageTo) { alert('Начальная страница больше конечной'); return; }
 
-    // Check file access
-    const handle = getFileHandle(this.bookId);
-    if (!handle) {
-      alert('Нет доступа к файлу. Переподключите файл.');
-      return;
-    }
-
-    // Verify permission
-    const hasPermission = await verifyFileHandle(this.bookId);
-    if (!hasPermission) {
-      try {
-        const granted = await (handle as any).requestPermission?.({ mode: 'read' });
-        if (granted !== 'granted') {
-          alert('Нет разрешения на чтение файла. Переподключите файл.');
-          return;
-        }
-      } catch {
-        alert('Не удалось получить разрешение. Переподключите файл.');
+    // Ensure file access — this restores from IndexedDB and requests permission if needed
+    const access = await ensureFileAccess(this.bookId);
+    if (access === null) {
+      // No handle at all — try reconnect
+      const book = await db.books.get(this.bookId);
+      const handle = await reconnectFileHandleWithCheck(this.bookId, book?.filePath);
+      if (!handle) {
+        alert('Не выбран файл. Нажмите «🔗 Подключить файл» чтобы выбрать PDF/DJVU.');
         return;
       }
+    } else if (access === 'denied') {
+      alert('Доступ к файлу запрещён. Нажмите «🔗 Подключить файл» чтобы выбрать файл заново.');
+      return;
     }
 
     // Get settings and create AI provider

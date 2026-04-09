@@ -46,12 +46,21 @@ export interface Book {
   format: BookFormat;
   extractionMode: ExtractionMode;
   filePath?: string;
-  // FileSystemFileHandle is not serializable — store as opaque marker
-  fileHandleStored: number; // 1 = handle is available
   tableOfContents: TOCEntry[];
   lastAnalyzedPage: number;
   createdAt: number;
   updatedAt: number;
+}
+
+// --- File handle persistence ---
+// FileSystemFileHandle IS structured-cloneable (Chrome 86+).
+// Stored in IndexedDB to survive extension reloads and tab closures.
+
+export interface FileHandleRecord {
+  id?: number;
+  bookId: string;
+  handle: unknown; // FileSystemFileHandle (structured clone)
+  savedAt: number;
 }
 
 // --- Ideas ---

@@ -8,6 +8,7 @@ import { IdeaListView } from './components/idea-list.js';
 import { IdeaGraphView } from './components/idea-graph.js';
 import { SettingsModal } from './components/settings-modal.js';
 import { getSettings } from '../db/index.js';
+import { restoreAllHandles } from './utils/file-store.js';
 import type { Settings } from '../db/schema.js';
 
 type ViewType = 'library' | 'ideas' | 'graph';
@@ -18,6 +19,8 @@ class App {
   private settings: Settings | null = null;
 
   async init(): Promise<void> {
+    // Restore file handles from IndexedDB before rendering
+    await restoreAllHandles();
     this.settings = await getSettings();
     this.applyTheme(this.settings.theme);
     this.render();
