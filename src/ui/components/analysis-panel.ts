@@ -8,9 +8,9 @@
 import { db, getSettings } from '../../db/index.js';
 import type { Book, ExtractionMode } from '../../db/schema.js';
 import { EXTRACTION_MODES } from '../../db/schema.js';
-import { evaluateTextLayer, getTextPreview } from '../../extraction/mode-detector.js';
+import { evaluateTextLayer, evaluateTextLayerMultiple, getTextPreview } from '../../extraction/mode-detector.js';
 import { extractTextFromPDFPage, renderPDFPageToImage } from '../../extraction/text-extractor.js';
-import { createProvider } from '../../background/ai-client.js';
+import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { runPipeline } from '../../extraction/pipeline.js';
 import { getFileHandle, verifyFileHandle, reconnectFileHandle, readFileAsArrayBuffer } from '../utils/file-store.js';
 
@@ -19,6 +19,7 @@ export class AnalysisPanel {
   private bookId: string;
   private selectedMode: ExtractionMode = 'text';
   private abortController: AbortController | null = null;
+  private pdfData: ArrayBuffer | null = null;
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -29,6 +30,9 @@ export class AnalysisPanel {
     const book = await db.books.get(this.bookId);
     if (!book) return;
 
+    const defaultFrom = Math.max(1, book.lastAnalyzedPage + 1);
+    const defaultTo = Math.min(book.totalPages, Math.max(1, book.lastAnalyzedPage + 10));
+
     // Try to read file for preview
     let previewHtml = '<p class="preview-unavailable">Нет доступа к файлу для предпросмотра</p>';
     let qualityReport: ReturnType<typeof evaluateTextLayer> | null = null;
@@ -36,50 +40,86 @@ export class AnalysisPanel {
     const handle = getFileHandle(this.bookId);
     if (handle) {
       try {
-        // Check permission
         const hasPermission = await verifyFileHandle(this.bookId);
         if (!hasPermission) {
-          // Try to request permission
-          const granted = await (handle as unknown as { requestPermission: (opts: { mode: string }) => Promise<string> }).requestPermission({ mode: 'read' });
-          if (granted !== 'granted') {
-            previewHtml = '<p class="preview-unavailable">Разрешение истекло. Нажмите «Переподключить файл».</p>';
-          }
+          try {
+            const granted = await (handle as unknown as { requestPermission: (opts: { mode: string }) => Promise<string> }).requestPermission({ mode: 'read' });
+            if (granted !== 'granted') {
+              previewHtml = '<p class="preview-unavailable">Разрешение истекло. Нажмите «Переподключить файл».</p>';
+            }
+          } catch { /* try anyway */ }
         }
-      } catch {
-        // Permission check failed — try anyway
-      }
+      } catch { /* Permission check failed — try anyway */ }
     }
 
+    // Try to load PDF data for preview
     if (handle) {
       try {
         const file = await handle.getFile();
-        const pdfData = await file.arrayBuffer();
-        const pageText = await extractTextFromPDFPage(pdfData, 1);
-        qualityReport = evaluateTextLayer(pageText.text, book.format);
-        const preview = getTextPreview(pageText.text, 800);
+        this.pdfData = await file.arrayBuffer();
+        // Extract text from the default range for multi-page evaluation
+        const pagesText: Array<{ page: number; text: string }> = [];
+        const maxSamples = 5;
+        const range = defaultTo - defaultFrom + 1;
+        const step = Math.max(1, Math.floor(range / maxSamples));
 
-        previewHtml = `
-          <div class="text-preview-section">
-            <div class="preview-header">
-              <span class="preview-label">Предпросмотр текстового слоя (стр. 1):</span>
-              <span class="quality-score ${this.qualityClass(qualityReport.score)}">
-                Качество: ${(qualityReport.score * 100).toFixed(0)}%
-              </span>
-            </div>
-            <pre class="text-preview-content">${this.esc(preview)}</pre>
-            ${qualityReport.issues.length > 0 ? `
-              <div class="quality-issues">
-                <strong>Обнаруженные проблемы:</strong>
-                <ul>${qualityReport.issues.map((i) => `<li>${i}</li>`).join('')}</ul>
+        for (let p = defaultFrom; p <= defaultTo; p += step) {
+          try {
+            const textResult = await extractTextFromPDFPage(this.pdfData, p);
+            pagesText.push({ page: p, text: textResult.text });
+          } catch { /* skip page */ }
+        }
+
+        // Also extract last page in range if not already included
+        if (pagesText.length > 0 && pagesText[pagesText.length - 1].page !== defaultTo) {
+          try {
+            const textResult = await extractTextFromPDFPage(this.pdfData, defaultTo);
+            pagesText.push({ page: defaultTo, text: textResult.text });
+          } catch { /* skip */ }
+        }
+
+        if (pagesText.length > 0) {
+          qualityReport = evaluateTextLayerMultiple(pagesText, book.format);
+
+          // Find first page with actual text for preview
+          const pageWithText = pagesText.find((p) => p.text.trim().length > 20);
+          const previewPage = pageWithText || pagesText[0];
+          const preview = getTextPreview(previewPage.text, 800);
+
+          previewHtml = `
+            <div class="text-preview-section">
+              <div class="preview-header">
+                <span class="preview-label">Предпросмотр (стр. ${previewPage.page}):</span>
+                <span class="quality-score ${this.qualityClass(qualityReport.score)}">
+                  Качество: ${(qualityReport.score * 100).toFixed(0)}%
+                </span>
               </div>
-            ` : ''}
-            <p class="quality-suggestion">
-              <strong>Рекомендация:</strong> ${qualityReport.reason}
-            </p>
-          </div>
-        `;
-      } catch {
-        previewHtml = '<p class="preview-unavailable">Не удалось извлечь текст для предпросмотра</p>';
+              ${qualityReport.sampledPages.length > 1 ? `
+                <div class="quality-pages">
+                  Проверены: ${qualityReport.sampledPages.map((p) => {
+                    const detail = qualityReport!.pageDetails.find((d) => d.page === p);
+                    const cls = detail ? this.qualityClass(detail.score) : '';
+                    return `<span class="${cls}">стр. ${p} (${detail ? (detail.score * 100).toFixed(0) : '?'}%)</span>`;
+                  }).join(', ')}
+                </div>
+              ` : ''}
+              <pre class="text-preview-content">${this.esc(preview)}</pre>
+              ${qualityReport.issues.length > 0 ? `
+                <div class="quality-issues">
+                  <strong>Обнаруженные проблемы:</strong>
+                  <ul>${qualityReport.issues.map((i) => `<li>${i}</li>`).join('')}</ul>
+                </div>
+              ` : ''}
+              <p class="quality-suggestion">
+                <strong>Рекомендация:</strong> ${qualityReport.reason}
+              </p>
+            </div>
+          `;
+        } else {
+          previewHtml = '<p class="preview-unavailable">Не удалось извлечь текст ни с одной страницы</p>';
+        }
+      } catch (err) {
+        previewHtml = `<p class="preview-unavailable">Не удалось извлечь текст: ${(err as Error).message}</p>`;
       }
     }
 
@@ -108,8 +148,9 @@ export class AnalysisPanel {
           </div>
         </div>
         <div class="range-inputs">
-          <label>С страницы: <input type="number" id="page-from" min="1" max="${book.totalPages}" value="${Math.max(1, book.lastAnalyzedPage + 1)}" /></label>
-          <label>По страницу: <input type="number" id="page-to" min="1" max="${book.totalPages}" value="${Math.min(book.totalPages, Math.max(1, book.lastAnalyzedPage + 10))}" /></label>
+          <label>С страницы: <input type="number" id="page-from" min="1" max="${book.totalPages}" value="${defaultFrom}" /></label>
+          <label>По страницу: <input type="number" id="page-to" min="1" max="${book.totalPages}" value="${defaultTo}" /></label>
+          <button class="secondary-btn" id="btn-repreview" title="Перепроверить текстовый слой для нового диапазона">🔄 Перепроверить</button>
         </div>
         <div class="analysis-options">
           <label>Детализация:
@@ -152,6 +193,7 @@ export class AnalysisPanel {
   private bindEvents(panel: HTMLElement): void {
     panel.querySelector('#btn-close')?.addEventListener('click', () => {
       this.abortController?.abort();
+      this.pdfData = null;
       panel.remove();
     });
 
@@ -165,11 +207,13 @@ export class AnalysisPanel {
       });
     });
 
+    // Re-preview button
+    panel.querySelector('#btn-repreview')?.addEventListener('click', () => this.repreview(panel));
+
     // Reconnect file button
     panel.querySelector('#btn-reconnect')?.addEventListener('click', async () => {
       const handle = await reconnectFileHandle(this.bookId);
       if (handle) {
-        // Re-render to show preview
         panel.remove();
         this.render();
       }
@@ -183,6 +227,89 @@ export class AnalysisPanel {
     });
 
     panel.querySelector('#btn-start')?.addEventListener('click', () => this.startAnalysis(panel));
+  }
+
+  /** Re-evaluate text layer when page range changes */
+  private async repreview(panel: HTMLElement): Promise<void> {
+    const book = await db.books.get(this.bookId);
+    if (!book || !this.pdfData) return;
+
+    const pageFrom = Number((panel.querySelector('#page-from') as HTMLInputElement)?.value || 1);
+    const pageTo = Number((panel.querySelector('#page-to') as HTMLInputElement)?.value || 1);
+    if (pageFrom > pageTo) return;
+
+    const previewSection = panel.querySelector('.text-preview-section');
+    if (!previewSection) return;
+
+    previewSection.innerHTML = '<p class="preview-unavailable">⏳ Проверка текстового слоя...</p>';
+
+    try {
+      const pagesText: Array<{ page: number; text: string }> = [];
+      const maxSamples = 5;
+      const range = pageTo - pageFrom + 1;
+      const step = Math.max(1, Math.floor(range / maxSamples));
+
+      for (let p = pageFrom; p <= pageTo; p += step) {
+        try {
+          const textResult = await extractTextFromPDFPage(this.pdfData, p);
+          pagesText.push({ page: p, text: textResult.text });
+        } catch { /* skip */ }
+      }
+      if (pagesText.length > 0 && pagesText[pagesText.length - 1].page !== pageTo) {
+        try {
+          const textResult = await extractTextFromPDFPage(this.pdfData, pageTo);
+          pagesText.push({ page: pageTo, text: textResult.text });
+        } catch { /* skip */ }
+      }
+
+      if (pagesText.length === 0) {
+        previewSection.innerHTML = '<p class="preview-unavailable">Не удалось извлечь текст</p>';
+        return;
+      }
+
+      const qualityReport = evaluateTextLayerMultiple(pagesText, book.format);
+      const pageWithText = pagesText.find((p) => p.text.trim().length > 20);
+      const previewPage = pageWithText || pagesText[0];
+      const preview = getTextPreview(previewPage.text, 800);
+
+      previewSection.innerHTML = `
+        <div class="preview-header">
+          <span class="preview-label">Предпросмотр (стр. ${previewPage.page}):</span>
+          <span class="quality-score ${this.qualityClass(qualityReport.score)}">
+            Качество: ${(qualityReport.score * 100).toFixed(0)}%
+          </span>
+        </div>
+        ${qualityReport.sampledPages.length > 1 ? `
+          <div class="quality-pages">
+            Проверены: ${qualityReport.sampledPages.map((p) => {
+              const detail = qualityReport.pageDetails.find((d) => d.page === p);
+              const cls = detail ? this.qualityClass(detail.score) : '';
+              return `<span class="${cls}">стр. ${p} (${detail ? (detail.score * 100).toFixed(0) : '?'}%)</span>`;
+            }).join(', ')}
+          </div>
+        ` : ''}
+        <pre class="text-preview-content">${this.esc(preview)}</pre>
+        ${qualityReport.issues.length > 0 ? `
+          <div class="quality-issues">
+            <strong>Обнаруженные проблемы:</strong>
+            <ul>${qualityReport.issues.map((i) => `<li>${i}</li>`).join('')}</ul>
+          </div>
+        ` : ''}
+        <p class="quality-suggestion">
+          <strong>Рекомендация:</strong> ${qualityReport.reason}
+        </p>
+      `;
+
+      // Update recommended mode
+      this.selectedMode = qualityReport.suggestedMode;
+      const radio = panel.querySelector(`input[name="extraction-mode"][value="${qualityReport.suggestedMode}"]`) as HTMLInputElement;
+      if (radio) radio.checked = true;
+      panel.querySelectorAll('.mode-option').forEach((opt) => {
+        opt.classList.toggle('selected', (opt.querySelector('input') as HTMLInputElement)?.checked);
+      });
+    } catch (err) {
+      previewSection.innerHTML = `<p class="preview-unavailable">Ошибка: ${(err as Error).message}</p>`;
+    }
   }
 
   private async startAnalysis(panel: HTMLElement): Promise<void> {
@@ -220,6 +347,7 @@ export class AnalysisPanel {
     if (!apiKey) { alert(`API ключ для ${settings.activeProvider} не настроен. Откройте настройки.`); return; }
 
     const provider = createProvider(settings.activeProvider, apiKey);
+    const fallbackModels = parseFallbackModels(settings.fallbackModels);
 
     // Show progress UI
     (panel.querySelector('#analysis-progress') as HTMLElement).style.display = 'block';
@@ -229,23 +357,22 @@ export class AnalysisPanel {
     const progressFill = panel.querySelector('#progress-fill') as HTMLElement;
     const progressText = panel.querySelector('#progress-text') as HTMLElement;
 
-    // Show mode info
     const modeLabel = EXTRACTION_MODES.find((m) => m.mode === this.selectedMode)?.label || this.selectedMode;
     progressText.textContent = `Режим: ${modeLabel}. Чтение файла...`;
 
-    // Create abort controller
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
     try {
-      // Read file
-      const pdfData = await readFileAsArrayBuffer(this.bookId);
+      // Read file (reuse cached data if available, otherwise re-read)
+      let pdfData = this.pdfData;
+      if (!pdfData) {
+        pdfData = await readFileAsArrayBuffer(this.bookId);
+      }
 
-      // Get book info
       const book = await db.books.get(this.bookId);
       if (!book) throw new Error('Книга не найдена');
 
-      // Run pipeline directly in tab context
       const result = await runPipeline({
         bookId: this.bookId,
         pageFrom,
@@ -257,6 +384,7 @@ export class AnalysisPanel {
         model: settings.activeModel,
         ocrModel: settings.ocrModel,
         vlmModel: settings.vlmModel,
+        fallbackModels,
         detail,
         signal,
         onProgress: (msg, pct) => {
@@ -265,14 +393,13 @@ export class AnalysisPanel {
         },
       });
 
-      // Done
       progressFill.style.width = '100%';
       const effectiveMode = EXTRACTION_MODES.find((m) => m.mode === result.mode)?.label || result.mode;
       progressText.textContent = `Готово! ${result.ideas.length} идей, ${result.relations.length} связей. Режим: ${effectiveMode}`;
 
-      // Dispatch event to refresh ideas list after a short delay
       setTimeout(() => {
         document.dispatchEvent(new CustomEvent('ideas-updated'));
+        this.pdfData = null;
         panel.remove();
       }, 1500);
     } catch (err) {

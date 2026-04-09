@@ -78,6 +78,17 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
+            <h3>🔄 Fallback-модели</h3>
+            <div class="setting-group">
+              <label for="inp-fallback">
+                Резервные модели (через запятую):
+                <span class="setting-hint">Если основная модель вернёт ошибку 429 (rate limit) или 5xx — автоматически переключится на следующую из списка. Применяется ко всем режимам (текст, OCR, VLM).</span>
+              </label>
+              <input type="text" id="inp-fallback" class="setting-input" value="${s.fallbackModels || ''}" placeholder="google/gemma-4-26b-a4b-it:free,openai/gpt-4o-mini,meta-llama/llama-3.1-70b-instruct" />
+            </div>
+          </section>
+
+          <section class="settings-section">
             <h3>🎨 Оформление</h3>
             <div class="setting-group">
               <label for="sel-theme">Тема:</label>
@@ -113,12 +124,32 @@ export class SettingsModal {
   private close(): void { this.modal?.remove(); this.modal = null; }
 
   private bindEvents(current: Settings): void {
+    // Only close via explicit buttons — prevent accidental close on paste/click
     this.modal?.querySelector('#btn-close')?.addEventListener('click', () => this.close());
-    this.modal?.addEventListener('click', (e) => { if (e.target === this.modal) this.close(); });
 
-    // Preset buttons
+    // Close only when clicking the dark overlay OUTSIDE the modal card.
+    // Use mousedown + mouseup pair: if mousedown started inside .modal, don't close.
+    let mouseDownInside = false;
+
+    this.modal?.addEventListener('mousedown', (e) => {
+      // Track if the click started inside the .modal card
+      const modalCard = this.modal?.querySelector('.modal');
+      mouseDownInside = modalCard?.contains(e.target as Node) ?? false;
+    }, true);
+
+    this.modal?.addEventListener('mouseup', (e) => {
+      // Only close if: mouse was on overlay (not inside card) AND released on overlay
+      if (e.target === this.modal && !mouseDownInside) {
+        this.close();
+      }
+      mouseDownInside = false;
+    }, true);
+
+    // Preset buttons — stop propagation to prevent any bubbling issues
     this.modal?.querySelectorAll('.preset-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('mousedown', (e) => e.stopPropagation());
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const target = (btn as HTMLElement).dataset.target;
         const value = (btn as HTMLElement).dataset.value;
         if (target && value) {
@@ -127,13 +158,15 @@ export class SettingsModal {
       });
     });
 
-    this.modal?.querySelector('#btn-save')?.addEventListener('click', async () => {
+    this.modal?.querySelector('#btn-save')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const el = (id: string) => this.modal!.querySelector(id) as HTMLInputElement | HTMLSelectElement;
       await updateSettings({
         activeProvider: el('#sel-provider').value as Settings['activeProvider'],
         activeModel: el('#inp-model').value || current.activeModel,
         ocrModel: el('#inp-ocr-model').value || current.ocrModel,
         vlmModel: el('#inp-vlm-model').value || current.vlmModel,
+        fallbackModels: el('#inp-fallback').value || current.fallbackModels,
         theme: el('#sel-theme').value as Settings['theme'],
         extractionDetail: el('#sel-detail').value as Settings['extractionDetail'],
         providerKeys: {

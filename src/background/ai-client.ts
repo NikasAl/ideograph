@@ -2,6 +2,7 @@ import type { LLMExtractedIdea, LLMRelation } from '../db/schema.js';
 
 // ============================================================
 // AI Client — unified interface for multiple LLM providers
+// With fallback model support for rate-limiting and errors
 // ============================================================
 
 export interface AIProvider {
@@ -29,6 +30,7 @@ export interface VisionContent {
 
 export interface ChatOptions {
   model?: string;
+  fallbackModels?: string[];  // models to try if primary fails
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
@@ -48,6 +50,15 @@ export interface AIModel {
   id: string;
   name: string;
   supportsVision: boolean;
+}
+
+/** Status codes that trigger fallback to next model */
+const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 529]);
+
+function isRetryableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Match "OpenRouter API error 429:", "error 503:", etc.
+  return RETRYABLE_STATUS_CODES.has(Number((msg.match(/API error (\d+)/) || [])[1]));
 }
 
 // ============================================================
@@ -81,6 +92,52 @@ export class OpenRouterProvider implements AIProvider {
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
+    return this.callWithFallback(messages, options, false);
+  }
+
+  async chatVision(messages: VisionMessage[], options?: ChatOptions): Promise<ChatResponse> {
+    return this.callWithFallback(messages as unknown as ChatMessage[], options, true);
+  }
+
+  /**
+   * Try primary model, then fallback models on retryable errors.
+   */
+  private async callWithFallback(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    isVision: boolean,
+  ): Promise<ChatResponse> {
+    const models = buildModelList(options?.model, options?.fallbackModels);
+    const errors: string[] = [];
+
+    for (const model of models) {
+      try {
+        const opts = { ...options, model };
+        if (isVision) {
+          // For vision, we still go through chat (messages already have image_url content)
+          return await this.doChat(messages, opts);
+        }
+        return await this.doChat(messages, opts);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[AI] Model ${model} failed: ${errMsg}`);
+
+        if (isRetryableError(err)) {
+          errors.push(`${model}: ${errMsg}`);
+          continue; // try next fallback
+        }
+        // Non-retryable error — throw immediately
+        throw err;
+      }
+    }
+
+    // All models failed
+    throw new Error(
+      `Все модели недоступны (${models.length} шт.):\n${errors.join('\n')}`,
+    );
+  }
+
+  private async doChat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
     const body: Record<string, unknown> = {
       model: options?.model || 'anthropic/claude-sonnet-4',
       messages,
@@ -103,10 +160,6 @@ export class OpenRouterProvider implements AIProvider {
         totalTokens: usage.total_tokens as number,
       } : undefined,
     };
-  }
-
-  async chatVision(messages: VisionMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    return this.chat(messages as unknown as ChatMessage[], options);
   }
 
   async listModels(): Promise<AIModel[]> {
@@ -138,12 +191,6 @@ export class ZAIProvider implements AIProvider {
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model: options?.model || 'default',
-      messages,
-      temperature: options?.temperature ?? 0.3,
-      max_tokens: options?.maxTokens ?? 4096,
-    };
     // TODO: implement z-ai API call
     throw new Error('z-ai provider not yet implemented');
   }
@@ -166,4 +213,46 @@ export function createProvider(provider: string, apiKey: string): AIProvider {
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+/**
+ * Build ordered list of models: primary first, then fallbacks.
+ * Skips empty strings and duplicates.
+ */
+export function buildModelList(primary: string | undefined, fallbacks: string[] | undefined): string[] {
+  const models: string[] = [];
+  const seen = new Set<string>();
+
+  if (primary?.trim()) {
+    models.push(primary.trim());
+    seen.add(primary.trim());
+  }
+
+  if (fallbacks) {
+    for (const m of fallbacks) {
+      const trimmed = m.trim();
+      if (trimmed && !seen.has(trimmed)) {
+        models.push(trimmed);
+        seen.add(trimmed);
+      }
+    }
+  }
+
+  // Always have at least one model
+  if (models.length === 0) {
+    models.push('anthropic/claude-sonnet-4');
+  }
+
+  return models;
+}
+
+/**
+ * Parse comma-separated fallback models string into array.
+ */
+export function parseFallbackModels(csv: string): string[] {
+  return csv.split(',').map((s) => s.trim()).filter(Boolean);
 }

@@ -9,6 +9,10 @@ export interface QualityReport {
   issues: string[];        // list of detected problems
   suggestedMode: ExtractionMode;
   reason: string;
+  /** Pages that were sampled */
+  sampledPages: number[];
+  /** Per-page quality info */
+  pageDetails: Array<{ page: number; score: number; textLength: number; hasText: boolean }>;
 }
 
 /**
@@ -24,6 +28,8 @@ export function evaluateTextLayer(text: string, source: 'pdf' | 'djvu'): Quality
       issues: ['Текст полностью отсутствует'],
       suggestedMode: 'vlm',
       reason: 'Нет текстового слоя — нужен визуальный анализ',
+      sampledPages: [],
+      pageDetails: [],
     };
   }
 
@@ -116,17 +122,119 @@ export function evaluateTextLayer(text: string, source: 'pdf' | 'djvu'): Quality
     reason += ' (DJVU файлы часто имеют проблемы с текстовым слоем)';
   }
 
-  return { score, issues, suggestedMode, reason };
+  return { score, issues, suggestedMode, reason, sampledPages: [], pageDetails: [] };
 }
 
 /**
- * Quick check: is text layer usable at all?
+ * Evaluate text layer quality across multiple pages.
+ * Samples up to `maxSamples` pages evenly spaced across [from, to].
+ * Aggregates: if at least one page has good text → score is averaged;
+ * if all pages are empty → score is 0.
  */
-export function hasUsableTextLayer(text: string): boolean {
-  if (!text || text.trim().length < 50) return false;
-  const readableMatch = text.match(/[\p{L}\p{N}]/gu);
-  const readableChars = readableMatch ? readableMatch.length : 0;
-  return readableChars / text.length > 0.4;
+export function evaluateTextLayerMultiple(
+  pages: Array<{ page: number; text: string }>,
+  source: 'pdf' | 'djvu',
+  maxSamples: number = 5,
+): QualityReport {
+  if (pages.length === 0) {
+    return {
+      score: 0,
+      issues: ['Нет данных для оценки'],
+      suggestedMode: 'vlm',
+      reason: 'Нет данных — нужен визуальный анализ',
+      sampledPages: [],
+      pageDetails: [],
+    };
+  }
+
+  // Sample pages evenly, up to maxSamples
+  const sampled = pages.length <= maxSamples
+    ? pages
+    : sampleEvenly(pages, maxSamples);
+
+  // Evaluate each sampled page
+  const details = sampled.map((p) => {
+    const report = evaluateTextLayer(p.text, source);
+    return {
+      page: p.page,
+      score: report.score,
+      textLength: p.text.length,
+      hasText: p.text.trim().length > 10,
+    };
+  });
+
+  // Aggregate: average score, weighted by text length (empty pages contribute less)
+  const totalWeight = details.reduce((sum, d) => sum + Math.max(d.textLength, 1), 0);
+  const weightedScore = details.reduce(
+    (sum, d) => sum + d.score * Math.max(d.textLength, 1),
+    0,
+  ) / totalWeight;
+
+  // Collect issues from all pages (deduplicated)
+  const allIssues = new Set<string>();
+  for (const p of sampled) {
+    const report = evaluateTextLayer(p.text, source);
+    report.issues.forEach((i) => allIssues.add(i));
+  }
+
+  // Count pages with usable text
+  const pagesWithText = details.filter((d) => d.hasText).length;
+  const allEmpty = pagesWithText === 0;
+  const someEmpty = pagesWithText < details.length;
+
+  // Build issues list
+  const issues: string[] = [];
+  if (allEmpty) {
+    issues.push('Все проверенные страницы не содержат текста');
+  } else if (someEmpty) {
+    issues.push(`${details.length - pagesWithText} из ${details.length} проверенных страниц пустые (обложка, титульные и т.д.)`);
+  }
+  allIssues.forEach((i) => {
+    if (!i.includes('Текст полностью отсутствует') && !i.includes('Слишком мало текста')) {
+      issues.push(i);
+    }
+  });
+
+  // Score: for empty pages, score is 0; for pages with text, use weighted average
+  const score = allEmpty ? 0 : weightedScore;
+
+  // Reason with context about sampling
+  const sampledList = details.map((d) => `стр. ${d.page} (${(d.score * 100).toFixed(0)}%)`).join(', ');
+  let reason: string;
+  let suggestedMode: ExtractionMode;
+
+  if (allEmpty) {
+    suggestedMode = 'vlm';
+    reason = `Проверены страницы: ${sampledList} — текст отсутствует. Нужен визуальный анализ (VLM)`;
+  } else if (score < 0.3) {
+    suggestedMode = 'vlm';
+    reason = `Среднее качество: ${(score * 100).toFixed(0)}% (${sampledList}). Текстовый слой непригоден — нужен визуальный анализ`;
+  } else if (score < 0.65 || issues.length >= 2) {
+    suggestedMode = 'ocr';
+    reason = `Среднее качество: ${(score * 100).toFixed(0)}% (${sampledList}). Рекомендуется OCR с распознаванием формул`;
+  } else {
+    suggestedMode = 'text';
+    reason = `Среднее качество: ${(score * 100).toFixed(0)}% (${sampledList}). Текстовый слой хорошего качества`;
+  }
+
+  // DJVU penalty
+  if (suggestedMode === 'text' && source === 'djvu' && score < 0.8) {
+    suggestedMode = 'ocr';
+    reason += ' (DJVU файлы часто имеют проблемы с текстовым слоем)';
+  }
+
+  return { score, issues, suggestedMode, reason, sampledPages: details.map((d) => d.page), pageDetails: details };
+}
+
+/** Sample items evenly from array */
+function sampleEvenly<T>(items: T[], count: number): T[] {
+  if (items.length <= count) return items;
+  const step = (items.length - 1) / (count - 1);
+  const result: T[] = [];
+  for (let i = 0; i < count; i++) {
+    result.push(items[Math.round(i * step)]);
+  }
+  return result;
 }
 
 /**

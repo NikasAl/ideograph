@@ -28,6 +28,7 @@ export interface PipelineOptions {
   model: string;               // text model for idea extraction
   ocrModel?: string;           // vision model for OCR phase
   vlmModel?: string;           // vision model for full VLM analysis
+  fallbackModels?: string[];   // fallback models on rate-limit / errors
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
@@ -54,6 +55,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   } = options;
   const ocrModel = options.ocrModel || model;
   const vlmModel = options.vlmModel || model;
+  const fallbackModels = options.fallbackModels;
 
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
@@ -75,16 +77,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
 
   // === MODE: TEXT ===
   if (effectiveMode === 'text') {
-    return runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport });
+    return runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
   }
 
   // === MODE: OCR ===
   if (effectiveMode === 'ocr') {
-    return runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport });
+    return runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
   }
 
   // === MODE: VLM ===
-  return runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport });
+  return runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
 }
 
 // ============================================================
@@ -97,8 +99,9 @@ async function runTextPipeline(opts: {
   pdfData: ArrayBuffer; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
+  fallbackModels?: string[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
   const pagesText = await extractTextFromPDFRange(pdfData, pageFrom, pageTo);
@@ -123,12 +126,12 @@ async function runTextPipeline(opts: {
       { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
     ];
 
-    const response = await provider.chat(messages, { model, jsonMode: true });
+    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
     const parsed = parseIdeasResponse(response.content);
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
 }
 
 // ============================================================
@@ -141,8 +144,9 @@ async function runOcrPipeline(opts: {
   pdfData: ArrayBuffer; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
+  fallbackModels?: string[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
 
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
@@ -162,7 +166,7 @@ async function runOcrPipeline(opts: {
 
     const ocrResponse = await provider.chatVision(
       [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
-      { model: ocrModel },
+      { model: ocrModel, fallbackModels },
     );
 
     const markdown = ocrResponse.content.trim();
@@ -197,12 +201,12 @@ async function runOcrPipeline(opts: {
       { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
     ];
 
-    const response = await provider.chat(messages, { model, jsonMode: true });
+    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
     const parsed = parseIdeasResponse(response.content);
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
 }
 
 // ============================================================
@@ -215,8 +219,9 @@ async function runVlmPipeline(opts: {
   pdfData: ArrayBuffer; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
+  fallbackModels?: string[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport } = opts;
+  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
@@ -235,14 +240,14 @@ async function runVlmPipeline(opts: {
 
     const response = await provider.chatVision(
       [{ role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction }, visionMsg],
-      { model: vlmModel, jsonMode: true },
+      { model: vlmModel, fallbackModels, jsonMode: true },
     );
 
     const parsed = parseIdeasResponse(response.content);
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
 }
 
 // ============================================================
@@ -254,8 +259,9 @@ async function finalizeIdeas(opts: {
   provider: AIProvider; model: string; pageFrom: number; pageTo: number;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
+  fallbackModels?: string[];
 }): Promise<PipelineResult> {
-  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport } = opts;
+  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels } = opts;
 
   onProgress?.('Дедупликация идей...', 85);
   const uniqueIdeas = deduplicateIdeas(allExtractedIdeas);
@@ -294,7 +300,7 @@ async function finalizeIdeas(opts: {
       { role: 'user', content: buildRelationsUser(ideasJson) },
     ];
 
-    const relResponse = await provider.chat(relMessages, { model, jsonMode: true });
+    const relResponse = await provider.chat(relMessages, { model, fallbackModels, jsonMode: true });
     relations = parseRelationsResponse(relResponse.content, ideas.map((i) => i.id));
 
     for (const rel of relations) {
