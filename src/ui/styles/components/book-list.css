@@ -1,0 +1,104 @@
+/* ============================================================
+   Book List component styles
+   ============================================================ */
+
+.books-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.book-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+  cursor: default;
+}
+
+.book-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.book-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.format-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.format-badge.pdf {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.format-badge.djvu {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+[data-theme="dark"] .format-badge.pdf {
+  background: #451a1a;
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .format-badge.djvu {
+  background: #1e3a5f;
+  color: #93c5fd;
+}
+
+.mode-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.book-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.book-author {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.book-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.book-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.book-actions .secondary-btn {
+  flex: 1;
+  text-align: center;
+}

@@ -1,0 +1,25 @@
+{
+  "name": "ideograph",
+  "version": "0.1.0",
+  "description": "Навигатор по идеям книг — Chrome-расширение для извлечения и структурирования идей из учебников",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src/",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "pdfjs-dist": "^4.10.38",
+    "vis-network": "^9.1.9"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0",
+    "@types/chrome": "^0.0.304",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.7"
+  }
+}
