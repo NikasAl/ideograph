@@ -3,11 +3,14 @@
 # Идеограф — Install Native Messaging Host
 #
 # This script installs the ideograph-host.py script and
-# registers it with Google Chrome as a Native Messaging Host.
+# registers it with Chrome/Chromium as a Native Messaging Host.
 #
-# Usage: bash install.sh [--user | --system]
-#   --user   Install for current user only (default)
-#   --system Install system-wide (requires sudo)
+# Usage: bash install.sh [EXTENSION_ID]
+#   EXTENSION_ID  The Chrome extension ID (from chrome://extensions/)
+#                 If not provided, will prompt you to enter it.
+#
+# Example:
+#   bash install.sh bajmijglngikofcohhjljpkdmgdejjem
 # ============================================================
 
 set -euo pipefail
@@ -23,41 +26,69 @@ HOST_SCRIPT_ABS="$(readlink -f "$HOST_SCRIPT")"
 INSTALL_DIR="$HOME/.local/share/ideograph"
 HOST_SCRIPT_INSTALLED="$INSTALL_DIR/ideograph-host.py"
 
-# Chrome NativeMessagingHosts directory
-CHROME_USER_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
-CHROME_SYSTEM_DIR="/etc/opt/chrome/native-messaging-hosts"
+# Chrome NativeMessagingHosts directories
+CHROME_NM_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+CHROMIUM_NM_DIR="$HOME/.config/chromium/NativeMessagingHosts"
 
-# Chromium NativeMessagingHosts directory
-CHROMIUM_USER_DIR="$HOME/.config/chromium/NativeMessagingHosts"
-CHROMIUM_SYSTEM_DIR="/etc/chromium/native-messaging-hosts"
+# ---- Get extension ID ----
+EXTENSION_ID="${1:-}"
 
-INSTALL_MODE="user"
+if [ -z "$EXTENSION_ID" ]; then
+    echo ""
+    echo "=== Идеограф — Установка Native Messaging Host ==="
+    echo ""
+    echo "Нужен ID расширения. Как его найти:"
+    echo "  1. Откройте chrome://extensions/ в Chrome"
+    echo "  2. Включите «Режим разработчика»"
+    echo "  3. Найдите «Идеограф» в списке"
+    echo "  4. Скопируйте ID (строка вида abcdefghijklmnopqrstuvwxyzabcdef)"
+    echo ""
 
-for arg in "$@"; do
-    case "$arg" in
-        --user)   INSTALL_MODE="user" ;;
-        --system) INSTALL_MODE="system" ;;
-        -h|--help)
-            echo "Usage: $0 [--user | --system]"
-            echo "  --user   Install for current user only (default)"
-            echo "  --system Install system-wide (requires sudo)"
-            exit 0
-            ;;
-    esac
-done
+    # Try to auto-detect from Chrome's preferences
+    CHROME_PREFS="$HOME/.config/google-chrome/Default/Preferences"
+    if [ -f "$CHROME_PREFS" ]; then
+        AUTO_ID=$(python3 -c "
+import json
+with open('$CHROME_PREFS') as f:
+    prefs = json.load(f)
+extensions = prefs.get('extensions', {}).get('settings', {})
+for eid, edata in extensions.items():
+    manifest = edata.get('manifest', {})
+    if 'Идеограф' in manifest.get('name', '') or 'ideograph' in manifest.get('name', '').lower():
+        print(eid)
+        break
+" 2>/dev/null || true)
+        if [ -n "$AUTO_ID" ]; then
+            echo "  Автообнаружен ID: $AUTO_ID"
+            EXTENSION_ID="$AUTO_ID"
+        fi
+    fi
 
-echo "=== Идеограф — Установка Native Messaging Host ==="
-echo "Режим: $INSTALL_MODE"
+    if [ -z "$EXTENSION_ID" ]; then
+        read -rp "Введите Extension ID: " EXTENSION_ID
+    fi
+fi
+
+# Validate extension ID format (32 lowercase hex chars)
+if ! echo "$EXTENSION_ID" | grep -qE '^[a-z]{32}$'; then
+    echo "Ошибка: Extension ID должен быть 32 символа (lowercase a-z)."
+    echo "Получено: '$EXTENSION_ID'"
+    echo "Убедитесь что копируете ID без лишних пробелов и символов."
+    exit 1
+fi
+
+echo ""
+echo "Extension ID: $EXTENSION_ID"
 echo ""
 
-# 1. Create install directory and copy host script
-echo "[1/4] Копирование хост-скрипта..."
+# ---- Step 1: Install host script ----
+echo "[1/4] Установка хост-скрипта..."
 mkdir -p "$INSTALL_DIR"
 cp "$HOST_SCRIPT_ABS" "$HOST_SCRIPT_INSTALLED"
 chmod +x "$HOST_SCRIPT_INSTALLED"
-echo "  ✓ Хост-скрипт: $HOST_SCRIPT_INSTALLED"
+echo "  ✓ $HOST_SCRIPT_INSTALLED"
 
-# 2. Verify Python3 is available
+# ---- Step 2: Check Python3 ----
 echo "[2/4] Проверка Python3..."
 if command -v python3 &>/dev/null; then
     PYTHON_VERSION=$(python3 --version 2>&1)
@@ -67,7 +98,7 @@ else
     exit 1
 fi
 
-# 3. Check for zathura
+# ---- Step 3: Check zathura ----
 echo "[3/4] Проверка zathura..."
 if command -v zathura &>/dev/null; then
     ZATHURA_VERSION=$(zathura --version 2>&1 || echo "installed")
@@ -76,43 +107,49 @@ else
     echo "  ⚠ zathura не найден. Установите: sudo apt install zathura"
 fi
 
-# 4. Install manifest for Chrome and Chromium
-echo "[4/4] Установка манифеста..."
+# ---- Step 4: Generate and install manifests ----
+echo "[4/4] Установка манифестов для Chrome/Chromium..."
 
-install_manifest() {
-    local manifest_src="$SCRIPT_DIR/$HOST_MANIFEST_NAME"
-    local manifest_dir="$1"
-    local manifest_dest="$manifest_dir/$HOST_MANIFEST_NAME"
+generate_manifest() {
+    local dest_dir="$1"
+    local dest_file="$dest_dir/$HOST_MANIFEST_NAME"
 
-    mkdir -p "$manifest_dir"
+    mkdir -p "$dest_dir"
 
-    # Update path in manifest to point to installed script
-    sed "s|/home/nikas/.local/share/ideograph/ideograph-host.py|$HOST_SCRIPT_INSTALLED|g" \
-        "$manifest_src" > "$manifest_dest"
+    cat > "$dest_file" << EOF
+{
+  "name": "com.ideograph.host",
+  "description": "Идеограф — Native Messaging Host для запуска zathura и других локальных команд",
+  "path": "$HOST_SCRIPT_INSTALLED",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://$EXTENSION_ID/"
+  ]
+}
+EOF
 
-    echo "  ✓ $manifest_dest"
+    echo "  ✓ $dest_file"
 }
 
-if [ "$INSTALL_MODE" = "system" ]; then
-    sudo mkdir -p "$CHROME_SYSTEM_DIR"
-    sudo mkdir -p "$CHROMIUM_SYSTEM_DIR"
-    sudo bash -c "$(declare -f install_manifest); install_manifest '$CHROME_SYSTEM_DIR'"
-    sudo bash -c "$(declare -f install_manifest); install_manifest '$CHROMIUM_SYSTEM_DIR'"
-else
-    install_manifest "$CHROME_USER_DIR"
-    install_manifest "$CHROMIUM_USER_DIR"
-fi
+generate_manifest "$CHROME_NM_DIR"
+generate_manifest "$CHROMIUM_NM_DIR"
 
+# ---- Summary ----
 echo ""
 echo "=== Установка завершена! ==="
 echo ""
-echo "Перезапустите Chrome/Chromium чтобы изменения вступили в силу."
+echo "  Extension ID: chrome-extension://$EXTENSION_ID/"
+echo "  Host script:  $HOST_SCRIPT_INSTALLED"
+echo "  Manifests:"
+echo "    - $CHROME_NM_DIR/$HOST_MANIFEST_NAME"
+echo "    - $CHROMIUM_NM_DIR/$HOST_MANIFEST_NAME"
 echo ""
-echo "Проверка работоспособности:"
-echo "  python3 $HOST_SCRIPT_INSTALLED"
-echo "  (затем вставьте: {\"action\":\"ping\"} и нажмите Enter, Ctrl+D)"
+echo "⚠️  Перезапустите Chrome/Chromium чтобы изменения вступили в силу."
+echo ""
+echo "Проверка:"
+echo "  python3 $HOST_SCRIPT_INSTALLED --test"
 echo ""
 echo "Удаление:"
 echo "  rm -rf $INSTALL_DIR"
-echo "  rm $CHROME_USER_DIR/$HOST_MANIFEST_NAME"
-echo "  rm $CHROMIUM_USER_DIR/$HOST_MANIFEST_NAME"
+echo "  rm $CHROME_NM_DIR/$HOST_MANIFEST_NAME"
+echo "  rm $CHROMIUM_NM_DIR/$HOST_MANIFEST_NAME"

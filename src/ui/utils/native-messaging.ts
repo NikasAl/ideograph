@@ -50,6 +50,13 @@ export function resetHostAvailability(): void {
 }
 
 /**
+ * Get the cached NMH status (for display purposes).
+ */
+export function getHostStatus(): boolean | null {
+  return hostAvailable;
+}
+
+/**
  * Send a message to the native messaging host.
  * Returns the parsed JSON response.
  * Throws if the host is not available or communication fails.
@@ -94,15 +101,18 @@ export async function openInZathura(
   const available = await isNativeHostAvailable();
 
   if (!available) {
-    // Fallback: copy command to clipboard
+    // Fallback: copy command to clipboard with NMH install hint
     const cmd = buildZathuraCommand(filePath, page, searchPhrase);
     await copyToClipboard(cmd);
+    let hint = 'NMH не установлен. Команда скопирована в буфер обмена.';
+    hint += '\nУстановка: cd native-host && bash install.sh YOUR_EXTENSION_ID';
+    if (searchPhrase) {
+      hint += `\nПоиск в zathura: /${searchPhrase.slice(0, 80)}`;
+    }
     return {
       launched: false,
       command: cmd,
-      searchHint: searchPhrase
-        ? `NMH не установлен. Скопируйте команду в терминал.\nПоиск: /${searchPhrase.slice(0, 80)}`
-        : 'NMH не установлен. Скопируйте команду в терминал.',
+      searchHint: hint,
     };
   }
 

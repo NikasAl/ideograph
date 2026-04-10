@@ -4,6 +4,6 @@
   "path": "/home/nikas/.local/share/ideograph/ideograph-host.py",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://bajmijglngikofcohhjljpkdmgdejjem/"
+    "chrome-extension://REPLACE_WITH_YOUR_EXTENSION_ID/"
   ]
 }
