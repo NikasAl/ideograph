@@ -32,6 +32,8 @@ export interface PipelineOptions {
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
+  /** Last successfully completed page (for resume support) */
+  resumeFromPage?: number;
 }
 
 export interface PipelineResult {
@@ -62,31 +64,65 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
 
   const detailInstruction = DETAIL_INSTRUCTIONS[detail];
 
-  // === Phase 0: Evaluate text layer quality (always, for caching and info) ===
+  // === Phase 0: Evaluate text layer quality for caching and logging ===
   onProgress?.('Оценка текстового слоя...', 5);
-  const firstPageText = await extractTextFromPDFPage(pdfData, pageFrom);
-  const qualityReport = evaluateTextLayer(firstPageText.text, format);
+  let firstPageText;
+  let qualityReport: ReturnType<typeof evaluateTextLayer>;
+  try {
+    firstPageText = await extractTextFromPDFPage(pdfData, pageFrom);
+    qualityReport = evaluateTextLayer(firstPageText.text, format);
+    // Cache text layer info
+    await cacheTextLayer(bookId, pageFrom, firstPageText.text, firstPageText.hasTextLayer, qualityReport.score);
+  } catch {
+    qualityReport = { score: 0, issues: ['Не удалось извлечь текст'], suggestedMode: mode, reason: '', sampledPages: [], pageDetails: [] };
+  }
 
-  // Cache text layer info
-  await cacheTextLayer(bookId, pageFrom, firstPageText.text, firstPageText.hasTextLayer, qualityReport.score);
-
-  // Determine effective mode: if user chose 'text' but quality is bad, fall back to 'ocr'
-  const effectiveMode = mode === 'text' && qualityReport.score < 0.3 ? 'ocr' : mode;
+  // Respect user's chosen mode — the UI already evaluated multiple pages and
+  // recommended a mode. Do NOT override it based on a single-page re-evaluation.
+  const effectiveMode = mode;
 
   onProgress?.(`Режим: ${effectiveMode.toUpperCase()}`, 8);
 
-  // === MODE: TEXT ===
-  if (effectiveMode === 'text') {
-    return runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
-  }
+  try {
+    // === MODE: TEXT ===
+    if (effectiveMode === 'text') {
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+    }
 
-  // === MODE: OCR ===
-  if (effectiveMode === 'ocr') {
-    return runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
-  }
+    // === MODE: OCR ===
+    if (effectiveMode === 'ocr') {
+      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+    }
 
-  // === MODE: VLM ===
-  return runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+    // === MODE: VLM ===
+    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+  } catch (err) {
+    // Log error analysis for debugging and resume support
+    await logAnalysisError(bookId, pageFrom, pageTo, effectiveMode, provider, model, err);
+    throw err;
+  }
+}
+
+/** Log a failed analysis so user can see what happened and resume from where stopped */
+async function logAnalysisError(
+  bookId: string, pageFrom: number, pageTo: number, mode: ExtractionMode,
+  provider: AIProvider, model: string, err: unknown,
+): Promise<void> {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  await db.analysisLog.add({
+    bookId,
+    pageFrom,
+    pageTo,
+    mode,
+    provider: provider.name,
+    model,
+    ideasCount: 0,
+    relationsCount: 0,
+    startedAt: Date.now(),
+    completedAt: Date.now(),
+    status: 'error',
+    error: errMsg.length > 500 ? errMsg.slice(0, 500) : errMsg,
+  });
 }
 
 // ============================================================
@@ -114,6 +150,7 @@ async function runTextPipeline(opts: {
   onProgress?.('Анализ идей через LLM...', 30);
   const chunks = buildTextChunks(pagesText, pageFrom);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
+  let lastCompletedChunkPage = pageFrom - 1;
 
   for (let i = 0; i < chunks.length; i++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -121,14 +158,24 @@ async function runTextPipeline(opts: {
     const pct = 30 + Math.round((i / chunks.length) * 50);
     onProgress?.(`Анализ чанка ${i + 1}/${chunks.length}...`, pct);
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction },
-      { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
-    ];
+    try {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction },
+        { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
+      ];
 
-    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
-    const parsed = parseIdeasResponse(response.content);
-    allExtractedIdeas.push(...parsed);
+      const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
+      const parsed = parseIdeasResponse(response.content);
+      allExtractedIdeas.push(...parsed);
+      lastCompletedChunkPage = chunks[i].pageRange[1];
+    } catch (err) {
+      // Save partial progress: update lastAnalyzedPage to last completed chunk's end page
+      await updateLastAnalyzedPage(bookId, lastCompletedChunkPage);
+      if (allExtractedIdeas.length > 0) {
+        await savePartialIdeas(bookId, allExtractedIdeas, provider, model, pageFrom, lastCompletedChunkPage);
+      }
+      throw err;
+    }
   }
 
   return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
@@ -151,6 +198,7 @@ async function runOcrPipeline(opts: {
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
   const markdownPages: Array<{ page: number; markdown: string }> = [];
+  let lastCompletedPage = pageFrom - 1;
 
   for (let p = pageFrom; p <= pageTo; p++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -158,31 +206,38 @@ async function runOcrPipeline(opts: {
     const pct = 10 + Math.round(((p - pageFrom) / (pageTo - pageFrom + 1)) * 35);
     onProgress?.(`OCR страницы ${p}...`, pct);
 
-    const imageBase64 = await renderPDFPageToImage(pdfData, p);
-    const visionMsg = buildVisionMessage(
-      { pageNumber: p, imageBase64 },
-      ocrPageUserPrompt(p),
-    );
+    try {
+      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const visionMsg = buildVisionMessage(
+        { pageNumber: p, imageBase64 },
+        ocrPageUserPrompt(p),
+      );
 
-    const ocrResponse = await provider.chatVision(
-      [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
-      { model: ocrModel, fallbackModels },
-    );
+      const ocrResponse = await provider.chatVision(
+        [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
+        { model: ocrModel, fallbackModels },
+      );
 
-    const markdown = ocrResponse.content.trim();
-    markdownPages.push({ page: p, markdown });
+      const markdown = ocrResponse.content.trim();
+      markdownPages.push({ page: p, markdown });
+      lastCompletedPage = p;
 
-    // Cache OCR result
-    await db.pageCache.put({
-      bookId,
-      pageNumber: p,
-      text: markdown,
-      hasTextLayer: false,
-      ocrMarkdown: markdown,
-      imageBase64,
-      qualityScore: 0,
-      cachedAt: Date.now(),
-    });
+      // Cache OCR result
+      await db.pageCache.put({
+        bookId,
+        pageNumber: p,
+        text: markdown,
+        hasTextLayer: false,
+        ocrMarkdown: markdown,
+        imageBase64,
+        qualityScore: 0,
+        cachedAt: Date.now(),
+      });
+    } catch (err) {
+      // Save partial progress: update lastAnalyzedPage to last completed page
+      await updateLastAnalyzedPage(bookId, lastCompletedPage);
+      throw err;
+    }
   }
 
   // Phase 2: Extract ideas from concatenated Markdown
@@ -225,6 +280,7 @@ async function runVlmPipeline(opts: {
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
+  let lastCompletedPage = pageFrom - 1;
 
   for (let p = pageFrom; p <= pageTo; p++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -232,19 +288,30 @@ async function runVlmPipeline(opts: {
     const pct = 10 + Math.round(((p - pageFrom) / (pageTo - pageFrom + 1)) * 70);
     onProgress?.(`Анализ страницы ${p} через vision LLM...`, pct);
 
-    const imageBase64 = await renderPDFPageToImage(pdfData, p);
-    const visionMsg = buildVisionMessage(
-      { pageNumber: p, imageBase64 },
-      extractIdeasUserVision(p),
-    );
+    try {
+      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const visionMsg = buildVisionMessage(
+        { pageNumber: p, imageBase64 },
+        extractIdeasUserVision(p),
+      );
 
-    const response = await provider.chatVision(
-      [{ role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction }, visionMsg],
-      { model: vlmModel, fallbackModels, jsonMode: true },
-    );
+      const response = await provider.chatVision(
+        [{ role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction }, visionMsg],
+        { model: vlmModel, fallbackModels, jsonMode: true },
+      );
 
-    const parsed = parseIdeasResponse(response.content);
-    allExtractedIdeas.push(...parsed);
+      const parsed = parseIdeasResponse(response.content);
+      allExtractedIdeas.push(...parsed);
+      lastCompletedPage = p;
+    } catch (err) {
+      // Save partial progress: update lastAnalyzedPage to last completed page
+      await updateLastAnalyzedPage(bookId, lastCompletedPage);
+      // If we have partial ideas, save them
+      if (allExtractedIdeas.length > 0) {
+        await savePartialIdeas(bookId, allExtractedIdeas, provider, vlmModel, pageFrom, lastCompletedPage);
+      }
+      throw err;
+    }
   }
 
   return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
@@ -406,6 +473,46 @@ async function cacheTextLayer(bookId: string, pageNumber: number, text: string, 
   } else {
     await db.pageCache.add({ bookId, pageNumber, text, hasTextLayer, qualityScore, cachedAt: Date.now() });
   }
+}
+
+/** Update lastAnalyzedPage on the book to enable resume from this page */
+async function updateLastAnalyzedPage(bookId: string, page: number): Promise<void> {
+  if (page < 1) return;
+  const book = await db.books.get(bookId);
+  if (book && page > book.lastAnalyzedPage) {
+    await db.books.update(bookId, { lastAnalyzedPage: page, updatedAt: Date.now() });
+  }
+}
+
+/** Save partially extracted ideas to DB (without building relations) */
+async function savePartialIdeas(
+  bookId: string, ideas: LLMExtractedIdea[],
+  provider: AIProvider, model: string, pageFrom: number, pageTo: number,
+): Promise<void> {
+  const uniqueIdeas = deduplicateIdeas(ideas);
+  const ideaRecords = uniqueIdeas.map((extracted, idx) => ({
+    id: `${bookId}_p${pageFrom}-${pageTo}_partial_${idx}`,
+    bookId,
+    title: extracted.title,
+    summary: extracted.summary,
+    quote: extracted.quote,
+    type: extracted.type,
+    depth: extracted.depth,
+    importance: extracted.importance,
+    pages: extracted.pages,
+    familiarity: 'unknown' as const,
+    status: 'unseen' as const,
+    notes: '',
+    questions: [],
+    userTags: extracted.tags || [],
+    aiModel: model,
+    provider: provider.name,
+    extractedAt: Date.now(),
+    relations: [] as import('../db/schema.js').Relation[],
+  }));
+
+  await db.ideas.bulkPut(ideaRecords);
+  console.log(`[Pipeline] Saved ${ideaRecords.length} partial ideas from pages ${pageFrom}-${pageTo}`);
 }
 
 function deduplicateIdeas(ideas: LLMExtractedIdea[]): LLMExtractedIdea[] {

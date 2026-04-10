@@ -388,7 +388,15 @@ export class AnalysisPanel {
       if ((err as Error).name === 'AbortError') {
         progressText.textContent = 'Отменено.';
       } else {
-        progressText.textContent = `Ошибка: ${(err as Error).message}`;
+        const errMsg = (err as Error).message;
+        // Check if partial results were saved
+        const book = await db.books.get(this.bookId);
+        const canResume = book && book.lastAnalyzedPage >= pageFrom;
+        const resumeMsg = canResume
+          ? `\n\n📋 Сохранён прогресс до стр. ${book.lastAnalyzedPage}. Откройте анализ заново — диапазон начнётся с未被обработанных страниц.`
+          : '';
+
+        progressText.textContent = `Ошибка: ${errMsg}${resumeMsg}`;
         console.error('Analysis failed:', err);
       }
       (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'none';

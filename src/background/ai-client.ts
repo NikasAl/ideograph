@@ -34,6 +34,8 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
+  /** Max retry attempts per model before moving to next (default: 2) */
+  retriesPerModel?: number;
 }
 
 export interface ChatResponse {
@@ -52,13 +54,30 @@ export interface AIModel {
   supportsVision: boolean;
 }
 
-/** Status codes that trigger fallback to next model */
+/** Status codes that trigger retry on the same model (transient errors) */
 const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 529]);
+
+/** Status codes that trigger fallback to the next model (permanent for this model) */
+const FALLBACK_STATUS_CODES = new Set([400, 401, 403, 422]);
 
 function isRetryableError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  // Match "OpenRouter API error 429:", "error 503:", etc.
-  return RETRYABLE_STATUS_CODES.has(Number((msg.match(/API error (\d+)/) || [])[1]));
+  const code = Number((msg.match(/API error (\d+)/) || [])[1]);
+  return RETRYABLE_STATUS_CODES.has(code);
+}
+
+function isFallbackError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = Number((msg.match(/API error (\d+)/) || [])[1]);
+  // Fallback if it's a known fallback status code OR if the error mentions "Provider returned error"
+  // (which indicates the upstream provider rejected the request, e.g. location restrictions)
+  if (FALLBACK_STATUS_CODES.has(code)) return true;
+  if (msg.includes('Provider returned error')) return true;
+  return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ============================================================
@@ -100,7 +119,9 @@ export class OpenRouterProvider implements AIProvider {
   }
 
   /**
-   * Try primary model, then fallback models on retryable errors.
+   * Try primary model, then fallback models.
+   * Retries transient errors (429/502/503/529) per model before moving to next.
+   * Permanent errors (400/401/403/"Provider returned error") skip immediately to next model.
    */
   private async callWithFallback(
     messages: ChatMessage[],
@@ -108,32 +129,44 @@ export class OpenRouterProvider implements AIProvider {
     isVision: boolean,
   ): Promise<ChatResponse> {
     const models = buildModelList(options?.model, options?.fallbackModels);
+    const maxRetries = options?.retriesPerModel ?? 2;
     const errors: string[] = [];
 
     for (const model of models) {
-      try {
-        const opts = { ...options, model };
-        if (isVision) {
-          // For vision, we still go through chat (messages already have image_url content)
-          return await this.doChat(messages, opts);
-        }
-        return await this.doChat(messages, opts);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn(`[AI] Model ${model} failed: ${errMsg}`);
+      let lastErr: Error | null = null;
 
-        if (isRetryableError(err)) {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const opts = { ...options, model };
+          return await this.doChat(messages, opts);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          lastErr = err instanceof Error ? err : new Error(errMsg);
+          console.warn(`[AI] Model ${model} failed (attempt ${attempt + 1}/${maxRetries + 1}): ${errMsg}`);
+
+          if (isFallbackError(err)) {
+            // Permanent error for this model — skip to next model immediately
+            errors.push(`${model}: ${errMsg}`);
+            break;
+          }
+
+          if (isRetryableError(err) && attempt < maxRetries) {
+            // Transient error — retry with exponential backoff
+            const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+            console.warn(`[AI] Retrying ${model} in ${delay}ms...`);
+            await sleep(delay);
+            continue;
+          }
+
+          // Exhausted retries or non-retryable error
           errors.push(`${model}: ${errMsg}`);
-          continue; // try next fallback
         }
-        // Non-retryable error — throw immediately
-        throw err;
       }
     }
 
     // All models failed
     throw new Error(
-      `Все модели недоступны (${models.length} шт.):\n${errors.join('\n')}`,
+      `Все модели недоступны (${models.length} шт., ${maxRetries + 1} попытки каждая):\n${errors.join('\n')}`,
     );
   }
 
