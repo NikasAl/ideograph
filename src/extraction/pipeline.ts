@@ -165,7 +165,7 @@ async function runTextPipeline(opts: {
       ];
 
       const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
-      const parsed = parseIdeasResponse(response.content);
+      const parsed = parseIdeasResponse(response.content, chunks[i].pageRange);
       allExtractedIdeas.push(...parsed);
       lastCompletedChunkPage = chunks[i].pageRange[1];
     } catch (err) {
@@ -257,7 +257,7 @@ async function runOcrPipeline(opts: {
     ];
 
     const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
-    const parsed = parseIdeasResponse(response.content);
+    const parsed = parseIdeasResponse(response.content, chunks[i].pageRange);
     allExtractedIdeas.push(...parsed);
   }
 
@@ -300,7 +300,7 @@ async function runVlmPipeline(opts: {
         { model: vlmModel, fallbackModels, jsonMode: true },
       );
 
-      const parsed = parseIdeasResponse(response.content);
+      const parsed = parseIdeasResponse(response.content, [p, p]);
       allExtractedIdeas.push(...parsed);
       lastCompletedPage = p;
     } catch (err) {
@@ -525,33 +525,42 @@ function deduplicateIdeas(ideas: LLMExtractedIdea[]): LLMExtractedIdea[] {
   });
 }
 
-function parseIdeasResponse(content: string): LLMExtractedIdea[] {
+function parseIdeasResponse(content: string, fallbackPageRange?: [number, number]): LLMExtractedIdea[] {
   try {
     const json = JSON.parse(content);
     const ideas = json.ideas || json;
     if (!Array.isArray(ideas)) return [];
-    return ideas.map(normalizeExtractedIdea);
+    return ideas.map((raw: Record<string, unknown>) => normalizeExtractedIdea(raw, fallbackPageRange));
   } catch {
     const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (match) {
       try {
         const json = JSON.parse(match[1]);
         const ideas = json.ideas || json;
-        if (Array.isArray(ideas)) return ideas.map(normalizeExtractedIdea);
+        if (Array.isArray(ideas)) return ideas.map((raw: Record<string, unknown>) => normalizeExtractedIdea(raw, fallbackPageRange));
       } catch { /* fall through */ }
     }
     return [];
   }
 }
 
-function normalizeExtractedIdea(raw: Record<string, unknown>): LLMExtractedIdea {
+function normalizeExtractedIdea(raw: Record<string, unknown>, fallbackPageRange?: [number, number]): LLMExtractedIdea {
+  let pages: number[] = [];
+  if (Array.isArray(raw.pages)) {
+    pages = raw.pages.map(Number).filter((n: number) => Number.isFinite(n));
+  }
+  // Fallback: if LLM didn't return pages, use the chunk's page range
+  if (pages.length === 0 && fallbackPageRange) {
+    const [from, to] = fallbackPageRange;
+    pages = from === to ? [from] : [from, to];
+  }
   return {
     title: String(raw.title || 'Без названия'),
     summary: String(raw.summary || ''),
     type: validateEnum(raw.type, ['definition', 'method', 'theorem', 'insight', 'example', 'analogy'], 'insight') as LLMExtractedIdea['type'],
     depth: validateEnum(raw.depth, ['basic', 'medium', 'advanced'], 'medium') as LLMExtractedIdea['depth'],
     importance: clamp(Number(raw.importance) || 3, 1, 5) as LLMExtractedIdea['importance'],
-    pages: Array.isArray(raw.pages) ? raw.pages.map(Number) : [],
+    pages,
     quote: raw.quote ? String(raw.quote) : undefined,
     tags: Array.isArray(raw.tags) ? raw.tags.map(String) : [],
     requires: Array.isArray(raw.requires) ? raw.requires.map(String) : [],

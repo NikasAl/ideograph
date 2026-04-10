@@ -97,6 +97,7 @@ export class IdeaListView {
         <div class="idea-meta">
           <span>📄 стр. ${i.pages.join(', ')}</span>
           ${i.relations.length ? `<span>🔗 ${i.relations.length} связей</span>` : ''}
+          <button class="btn-context" data-idea-id="${i.id}" data-book-id="${i.bookId}" data-pages="${i.pages.join(',')}">📄 Контекст</button>
           ${this.bookFilePath ? `
             ${i.pages.map((p, idx) => `
               <button class="btn-zathura" data-page="${p}" data-quote="${this.escAttr(i.quote || '')}" title="Открыть в zathura на стр. ${p}">
@@ -108,6 +109,7 @@ export class IdeaListView {
             <span class="zathura-hint" title="Добавьте путь к файлу в настройках книги">📖 путь не указан</span>
           ` : ''}
         </div>
+        <div class="idea-context-container" id="context-${i.id}"></div>
         <div class="idea-card-actions">
           <div class="familiarity-group">
             <label class="group-label">Знакомство:</label>
@@ -188,6 +190,59 @@ export class IdeaListView {
 
         btn.classList.remove('btn-zathura-loading');
         setTimeout(() => { btn.textContent = original; }, 2500);
+      });
+    });
+
+    // Context buttons — load and show page text from pageCache
+    this.container.querySelectorAll('.btn-context').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const el = btn as HTMLElement;
+        const pages = (el.dataset.pages || '').split(',').map(Number).filter(Boolean);
+        const bookId = el.dataset.bookId;
+        const ideaId = el.dataset.ideaId;
+        if (!pages.length || !bookId || !ideaId) return;
+
+        const container = document.getElementById(`context-${ideaId}`);
+        if (!container) return;
+
+        // Toggle: if already shown, hide
+        if (container.classList.contains('context-visible')) {
+          container.innerHTML = '';
+          container.classList.remove('context-visible');
+          return;
+        }
+
+        el.textContent = '⏳ Загрузка...';
+        el.classList.add('btn-zathura-loading');
+
+        try {
+          const pageTexts: Array<{ page: number; text: string }> = [];
+          for (const p of pages) {
+            const cached = await db.pageCache.where({ bookId, pageNumber: p }).first();
+            if (cached?.text) {
+              pageTexts.push({ page: p, text: cached.text });
+            }
+          }
+
+          if (pageTexts.length === 0) {
+            container.innerHTML = `<div class="context-empty">Текст страниц не найден в кэше. Запустите анализ заново чтобы заполнить кэш.</div>`;
+          } else {
+            container.innerHTML = pageTexts.map(pt => `
+              <details class="context-section" open>
+                <summary class="context-summary">Страница ${pt.page}</summary>
+                <pre class="context-text">${this.esc(pt.text)}</pre>
+              </details>
+            `).join('');
+          }
+          container.classList.add('context-visible');
+          el.textContent = '📄 Скрыть контекст';
+        } catch (err) {
+          container.innerHTML = `<div class="context-empty">Ошибка загрузки контекста: ${this.esc(String(err))}</div>`;
+          container.classList.add('context-visible');
+          el.textContent = '📄 Контекст';
+        }
+
+        el.classList.remove('btn-zathura-loading');
       });
     });
 
