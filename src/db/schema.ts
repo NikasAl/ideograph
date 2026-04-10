@@ -128,6 +128,7 @@ export interface Settings {
   id?: number;
   activeProvider: 'openrouter' | 'z-ai';
   providerKeys: ProviderKeys;
+  zaiBaseUrl?: string;          // z-ai API base URL (e.g. http://host:port/v1)
   activeModel: string;          // основная модель для извлечения идей (text)
   ocrModel: string;            // vision модель для OCR → Markdown+LaTeX
   vlmModel: string;            // vision модель для полного визуального анализа

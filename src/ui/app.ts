@@ -23,8 +23,8 @@ class App {
     await restoreAllHandles();
     this.settings = await getSettings();
     this.applyTheme(this.settings.theme);
+    this.bindGlobalEvents();
     this.render();
-    this.bindEvents();
   }
 
   private applyTheme(theme: string): void {
@@ -78,6 +78,7 @@ class App {
     `;
 
     this.renderCurrentView();
+    this.bindDomEvents();
   }
 
   private renderCurrentView(): void {
@@ -101,7 +102,8 @@ class App {
     }
   }
 
-  private bindEvents(): void {
+  /** Bind DOM element listeners (must be called after every render) */
+  private bindDomEvents(): void {
     document.querySelectorAll('.nav-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.currentView = (btn as HTMLElement).dataset.view as ViewType;
@@ -122,7 +124,10 @@ class App {
     document.getElementById('btn-settings')?.addEventListener('click', () => {
       new SettingsModal().open();
     });
+  }
 
+  /** Bind document-level listeners (called once) */
+  private bindGlobalEvents(): void {
     document.addEventListener('book-selected', ((e: CustomEvent) => {
       this.selectedBookId = e.detail.bookId;
       this.currentView = 'ideas';

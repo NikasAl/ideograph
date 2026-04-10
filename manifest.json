@@ -8,6 +8,11 @@
     "activeTab",
     "nativeMessaging"
   ],
+  "host_permissions": [
+    "https://openrouter.ai/*",
+    "http://*/*",
+    "https://*/*"
+  ],
   "action": {
     "default_title": "Идеограф",
     "default_icon": {

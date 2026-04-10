@@ -328,7 +328,7 @@ export class AnalysisPanel {
     const apiKey = settings.providerKeys[settings.activeProvider];
     if (!apiKey) { alert(`API ключ для ${settings.activeProvider} не настроен. Откройте настройки.`); return; }
 
-    const provider = createProvider(settings.activeProvider, apiKey);
+    const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
     const fallbackModels = parseFallbackModels(settings.fallbackModels);
 
     // Show progress UI

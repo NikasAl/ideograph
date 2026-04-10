@@ -30,6 +30,13 @@ export class SettingsModal {
               <label for="key-z-ai">z-ai API Key:</label>
               <input type="password" id="key-z-ai" class="setting-input" value="${s.providerKeys['z-ai'] || ''}" placeholder="Ваш z-ai ключ" />
             </div>
+            <div class="setting-group">
+              <label for="inp-zai-url">
+                z-ai Base URL:
+                <span class="setting-hint">Адрес API сервера z-ai (напр. http://172.25.136.193:8080/v1)</span>
+              </label>
+              <input type="text" id="inp-zai-url" class="setting-input" value="${s.zaiBaseUrl || ''}" placeholder="http://host:port/v1" />
+            </div>
           </section>
 
           <section class="settings-section">
@@ -67,13 +74,19 @@ export class SettingsModal {
               <input type="text" id="inp-vlm-model" class="setting-input" value="${s.vlmModel}" placeholder="anthropic/claude-sonnet-4" />
             </div>
             <div class="setting-group model-presets">
-              <span class="preset-label">Рекомендованные presets (OpenRouter):</span>
+              <span class="preset-label">Presets — OpenRouter:</span>
               <button class="preset-btn" data-target="inp-model" data-value="anthropic/claude-sonnet-4">claude-sonnet-4</button>
               <button class="preset-btn" data-target="inp-ocr-model" data-value="google/gemini-2.0-flash-001">gemini-flash (OCR)</button>
               <button class="preset-btn" data-target="inp-vlm-model" data-value="anthropic/claude-sonnet-4">claude-sonnet-4 (VLM)</button>
               <button class="preset-btn" data-target="inp-vlm-model" data-value="google/gemini-2.5-pro-preview">gemini-pro (VLM)</button>
               <button class="preset-btn" data-target="inp-model" data-value="openai/gpt-4o-mini">gpt-4o-mini</button>
               <button class="preset-btn" data-target="inp-ocr-model" data-value="openai/gpt-4o">gpt-4o (OCR)</button>
+            </div>
+            <div class="setting-group model-presets">
+              <span class="preset-label">Presets — z-ai:</span>
+              <button class="preset-btn" data-target="inp-model" data-value="glm-4-plus">glm-4-plus</button>
+              <button class="preset-btn" data-target="inp-ocr-model" data-value="glm-4v-plus">glm-4v-plus (OCR)</button>
+              <button class="preset-btn" data-target="inp-vlm-model" data-value="glm-4v-plus">glm-4v-plus (VLM)</button>
             </div>
           </section>
 
@@ -159,6 +172,7 @@ export class SettingsModal {
         fallbackModels: el('#inp-fallback').value || current.fallbackModels,
         theme: el('#sel-theme').value as Settings['theme'],
         extractionDetail: el('#sel-detail').value as Settings['extractionDetail'],
+        zaiBaseUrl: el('#inp-zai-url').value || undefined,
         providerKeys: {
           ...current.providerKeys,
           openrouter: el('#key-openrouter').value || undefined,

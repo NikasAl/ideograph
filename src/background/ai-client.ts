@@ -212,24 +212,119 @@ export class OpenRouterProvider implements AIProvider {
 }
 
 // ============================================================
-// z-ai Provider (coming soon)
+// z-ai Provider — OpenAI-compatible API with custom headers
 // ============================================================
 
 export class ZAIProvider implements AIProvider {
   name = 'z-ai';
   private apiKey: string;
+  private baseUrl: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, baseUrl?: string) {
     this.apiKey = apiKey;
+    this.baseUrl = (baseUrl || '').replace(/\/+$/, ''); // strip trailing slashes
+    if (!this.baseUrl) throw new Error('z-ai: baseUrl is required (set in Settings)');
+  }
+
+  private async request(endpoint: string, body: Record<string, unknown>): Promise<unknown> {
+    const url = `${this.baseUrl}${endpoint}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+      'X-Z-AI-From': 'Z',
+    };
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`z-ai API error ${resp.status}: ${err}`);
+    }
+    return resp.json();
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    // TODO: implement z-ai API call
-    throw new Error('z-ai provider not yet implemented');
+    return this.callWithFallback(messages, options, false);
   }
 
   async chatVision(messages: VisionMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    throw new Error('z-ai vision not yet implemented');
+    return this.callWithFallback(messages as unknown as ChatMessage[], options, true);
+  }
+
+  /**
+   * Try primary model, then fallback models.
+   * Retries transient errors per model before moving to next.
+   */
+  private async callWithFallback(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    isVision: boolean,
+  ): Promise<ChatResponse> {
+    const models = buildModelList(options?.model, options?.fallbackModels);
+    const maxRetries = options?.retriesPerModel ?? 2;
+    const errors: string[] = [];
+
+    for (const model of models) {
+      let lastErr: Error | null = null;
+
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const opts = { ...options, model };
+          return await this.doChat(messages, opts, isVision);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          lastErr = err instanceof Error ? err : new Error(errMsg);
+          console.warn(`[z-ai] Model ${model} failed (attempt ${attempt + 1}/${maxRetries + 1}): ${errMsg}`);
+
+          if (isFallbackError(err)) {
+            errors.push(`${model}: ${errMsg}`);
+            break;
+          }
+
+          if (isRetryableError(err) && attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+            console.warn(`[z-ai] Retrying ${model} in ${delay}ms...`);
+            await sleep(delay);
+            continue;
+          }
+
+          errors.push(`${model}: ${errMsg}`);
+        }
+      }
+    }
+
+    throw new Error(
+      `z-ai: все модели недоступны (${models.length} шт.):\n${errors.join('\n')}`,
+    );
+  }
+
+  private async doChat(messages: ChatMessage[], options?: ChatOptions, isVision?: boolean): Promise<ChatResponse> {
+    const endpoint = isVision ? '/chat/completions/vision' : '/chat/completions';
+    const body: Record<string, unknown> = {
+      model: options?.model || 'glm-4-plus',
+      messages,
+      temperature: options?.temperature ?? 0.3,
+      max_tokens: options?.maxTokens ?? 4096,
+      thinking: { type: 'disabled' },
+    };
+    if (options?.jsonMode) {
+      body.response_format = { type: 'json_object' };
+    }
+    const data = await this.request(endpoint, body) as Record<string, unknown>;
+    const choice = (data.choices as Array<Record<string, unknown>>)[0];
+    const message = choice.message as Record<string, unknown>;
+    const usage = data.usage as Record<string, unknown> | undefined;
+    return {
+      content: message.content as string,
+      model: data.model as string,
+      usage: usage ? {
+        promptTokens: usage.prompt_tokens as number,
+        completionTokens: usage.completion_tokens as number,
+        totalTokens: usage.total_tokens as number,
+      } : undefined,
+    };
   }
 }
 
@@ -237,12 +332,12 @@ export class ZAIProvider implements AIProvider {
 // Provider factory
 // ============================================================
 
-export function createProvider(provider: string, apiKey: string): AIProvider {
+export function createProvider(provider: string, apiKey: string, extra?: { zaiBaseUrl?: string }): AIProvider {
   switch (provider) {
     case 'openrouter':
       return new OpenRouterProvider(apiKey);
     case 'z-ai':
-      return new ZAIProvider(apiKey);
+      return new ZAIProvider(apiKey, extra?.zaiBaseUrl);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
