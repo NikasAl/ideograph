@@ -36,6 +36,8 @@ class App {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
+  private showAbout = false;
+
   private render(): void {
     const app = document.getElementById('app');
     if (!app) return;
@@ -58,9 +60,17 @@ class App {
           </button>
         </nav>
         <div class="app-actions">
+          <button class="icon-btn btn-about" id="btn-about" title="О расширении">ℹ️</button>
           <button class="icon-btn" id="btn-settings" title="Настройки">⚙️</button>
         </div>
       </header>
+
+      ${this.showAbout ? `
+      <div class="about-banner">
+        <span class="about-text">💡 Идеограф — Навигатор по идеям книг</span>
+        <button class="about-close" id="btn-about-close">✕</button>
+      </div>
+      ` : ''}
 
       <main class="app-content">
         <div id="view-container"></div>
@@ -97,6 +107,16 @@ class App {
         this.currentView = (btn as HTMLElement).dataset.view as ViewType;
         this.render();
       });
+    });
+
+    document.getElementById('btn-about')?.addEventListener('click', () => {
+      this.showAbout = !this.showAbout;
+      this.render();
+    });
+
+    document.getElementById('btn-about-close')?.addEventListener('click', () => {
+      this.showAbout = false;
+      this.render();
     });
 
     document.getElementById('btn-settings')?.addEventListener('click', () => {
