@@ -241,3 +241,37 @@
 .btn-zathura:active {
   transform: scale(0.97);
 }
+
+.btn-zathura-loading {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Zathura hint when path not specified */
+.zathura-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Floating popup hint (shown after zathura launch) */
+.zathura-popup-hint {
+  position: relative;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--accent-light, rgba(59, 130, 246, 0.08));
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--accent, #3b82f6);
+  line-height: 1.5;
+  max-width: 400px;
+  word-break: break-word;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  animation: zathura-hint-appear 0.2s ease;
+}
+
+@keyframes zathura-hint-appear {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

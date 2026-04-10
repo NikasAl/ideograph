@@ -5,6 +5,7 @@
 import { db } from '../../db/index.js';
 import type { Idea, Familiarity, IdeaStatus } from '../../db/schema.js';
 import { AnalysisPanel } from './analysis-panel.js';
+import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
 import '../styles/components/idea-list.css';
 
 const TYPE_ICONS: Record<string, string> = {
@@ -103,6 +104,9 @@ export class IdeaListView {
               </button>
             `).join('')}
           ` : ''}
+          ${!this.bookFilePath ? `
+            <span class="zathura-hint" title="Добавьте путь к файлу в настройках книги">📖 путь не указан</span>
+          ` : ''}
         </div>
         <div class="idea-card-actions">
           <div class="familiarity-group">
@@ -156,41 +160,34 @@ export class IdeaListView {
       new AnalysisPanel(this.container, this.bookId).render();
     });
 
-    // Zathura buttons — copy command to clipboard
+    // Zathura buttons — launch via Native Messaging Host or fallback to clipboard
     this.container.querySelectorAll('.btn-zathura').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const page = (btn as HTMLElement).dataset.page;
-        const quote = (btn as HTMLElement).dataset.quote;
+        const page = parseInt((btn as HTMLElement).dataset.page || '0', 10);
+        const quote = (btn as HTMLElement).dataset.quote || '';
         if (!page || !this.bookFilePath) return;
 
-        const cmd = `zathura -f ${page} '${this.bookFilePath}'`;
-        try {
-          await navigator.clipboard.writeText(cmd);
-          // Brief visual feedback
-          const original = btn.textContent;
-          btn.textContent = '✅ Скопировано!';
-          setTimeout(() => { btn.textContent = original; }, 1500);
-        } catch {
-          // Fallback: select text for manual copy
-          const textarea = document.createElement('textarea');
-          textarea.value = cmd;
-          document.body.appendChild(textarea);
-          textarea.select();
-          document.execCommand('copy');
-          document.body.removeChild(textarea);
-          const original = btn.textContent;
-          btn.textContent = '✅ Скопировано!';
-          setTimeout(() => { btn.textContent = original; }, 1500);
+        const original = btn.textContent;
+        btn.textContent = '⏳ Открываю...';
+        btn.classList.add('btn-zathura-loading');
+
+        const result = await openInZathura(this.bookFilePath, page, quote || undefined);
+
+        if (result.launched) {
+          btn.textContent = '✅ Открыто!';
+          if (result.searchHint) {
+            // Show search hint as a tooltip-like element
+            showZathuraHint(btn, result.searchHint);
+          }
+        } else {
+          btn.textContent = '📋 Скопировано';
+          if (result.error) {
+            showZathuraHint(btn, result.error);
+          }
         }
 
-        // If there's a quote, also copy the search phrase hint
-        if (quote) {
-          const searchHint = `\nПоиск в zathura: /${quote.slice(0, 80)}`;
-          try {
-            const fullCmd = cmd + searchHint;
-            await navigator.clipboard.writeText(fullCmd);
-          } catch { /* already copied base cmd */ }
-        }
+        btn.classList.remove('btn-zathura-loading');
+        setTimeout(() => { btn.textContent = original; }, 2500);
       });
     });
 
@@ -213,4 +210,25 @@ export class IdeaListView {
   private escAttr(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+}
+
+/**
+ * Show a brief floating hint near the zathura button.
+ * Auto-removes after 4 seconds.
+ */
+function showZathuraHint(anchor: Element, message: string): void {
+  // Remove any existing hint
+  const existing = anchor.parentElement?.querySelector('.zathura-popup-hint');
+  if (existing) existing.remove();
+
+  const hint = document.createElement('div');
+  hint.className = 'zathura-popup-hint';
+  hint.textContent = message;
+  anchor.parentElement?.appendChild(hint);
+
+  setTimeout(() => {
+    hint.style.opacity = '0';
+    hint.style.transform = 'translateY(4px)';
+    setTimeout(() => hint.remove(), 300);
+  }, 4000);
 }

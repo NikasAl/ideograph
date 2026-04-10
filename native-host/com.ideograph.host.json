@@ -1,0 +1,9 @@
+{
+  "name": "com.ideograph.host",
+  "description": "Идеограф — Native Messaging Host для запуска zathura и других локальных команд",
+  "path": "/home/nikas/.local/share/ideograph/ideograph-host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://bajmijglngikofcohhjljpkdmgdejjem/"
+  ]
+}
