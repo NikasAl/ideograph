@@ -17,6 +17,10 @@ import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DET
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface PipelineOptions {
   bookId: string;
   pageFrom: number;
@@ -29,6 +33,7 @@ export interface PipelineOptions {
   ocrModel?: string;           // vision model for OCR phase
   vlmModel?: string;           // vision model for full VLM analysis
   fallbackModels?: string[];   // fallback models on rate-limit / errors
+  requestDelayMs?: number;     // delay (ms) between consecutive API requests
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
@@ -53,7 +58,7 @@ export interface PipelineResult {
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const {
     bookId, pageFrom, pageTo, mode, pdfData, format,
-    provider, model, detail, signal, onProgress,
+    provider, model, detail, signal, onProgress, requestDelayMs,
   } = options;
   const ocrModel = options.ocrModel || model;
   const vlmModel = options.vlmModel || model;
@@ -86,16 +91,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   try {
     // === MODE: TEXT ===
     if (effectiveMode === 'text') {
-      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
     }
 
     // === MODE: OCR ===
     if (effectiveMode === 'ocr') {
-      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
     }
 
     // === MODE: VLM ===
-    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels });
+    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
   } catch (err) {
     // Log error analysis for debugging and resume support
     await logAnalysisError(bookId, pageFrom, pageTo, effectiveMode, provider, model, err);
@@ -136,8 +141,9 @@ async function runTextPipeline(opts: {
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
+  requestDelayMs?: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
   const pagesText = await extractTextFromPDFRange(pdfData, pageFrom, pageTo);
@@ -157,6 +163,9 @@ async function runTextPipeline(opts: {
 
     const pct = 30 + Math.round((i / chunks.length) * 50);
     onProgress?.(`Анализ чанка ${i + 1}/${chunks.length}...`, pct);
+
+    // Rate-limit delay between requests
+    if (i > 0 && requestDelayMs) await sleep(requestDelayMs);
 
     try {
       const messages: ChatMessage[] = [
@@ -192,8 +201,9 @@ async function runOcrPipeline(opts: {
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
+  requestDelayMs?: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
 
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
@@ -205,6 +215,9 @@ async function runOcrPipeline(opts: {
 
     const pct = 10 + Math.round(((p - pageFrom) / (pageTo - pageFrom + 1)) * 35);
     onProgress?.(`OCR страницы ${p}...`, pct);
+
+    // Rate-limit delay between requests
+    if (p > pageFrom && requestDelayMs) await sleep(requestDelayMs);
 
     try {
       const imageBase64 = await renderPDFPageToImage(pdfData, p);
@@ -251,6 +264,9 @@ async function runOcrPipeline(opts: {
     const pct = 50 + Math.round((i / chunks.length) * 30);
     onProgress?.(`Анализ чанка ${i + 1}/${chunks.length}...`, pct);
 
+    // Rate-limit delay between requests
+    if (i > 0 && requestDelayMs) await sleep(requestDelayMs);
+
     const messages: ChatMessage[] = [
       { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction },
       { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
@@ -275,8 +291,9 @@ async function runVlmPipeline(opts: {
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
+  requestDelayMs?: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels } = opts;
+  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
@@ -287,6 +304,9 @@ async function runVlmPipeline(opts: {
 
     const pct = 10 + Math.round(((p - pageFrom) / (pageTo - pageFrom + 1)) * 70);
     onProgress?.(`Анализ страницы ${p} через vision LLM...`, pct);
+
+    // Rate-limit delay between requests
+    if (p > pageFrom && requestDelayMs) await sleep(requestDelayMs);
 
     try {
       const imageBase64 = await renderPDFPageToImage(pdfData, p);

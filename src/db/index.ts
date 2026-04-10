@@ -45,6 +45,7 @@ const DEFAULT_SETTINGS: Settings = {
   ocrModel: 'google/gemini-2.0-flash-001',
   vlmModel: 'anthropic/claude-sonnet-4',
   fallbackModels: 'google/gemma-4-26b-a4b-it:free,openai/gpt-4o-mini,meta-llama/llama-3.1-70b-instruct',
+  requestDelayMs: 0,
   theme: 'system',
   language: 'ru',
   extractionDetail: 'medium',

@@ -367,6 +367,7 @@ export class AnalysisPanel {
         ocrModel: settings.ocrModel,
         vlmModel: settings.vlmModel,
         fallbackModels,
+        requestDelayMs: settings.requestDelayMs,
         detail,
         signal,
         onProgress: (msg, pct) => {

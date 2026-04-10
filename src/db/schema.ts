@@ -133,6 +133,7 @@ export interface Settings {
   ocrModel: string;            // vision модель для OCR → Markdown+LaTeX
   vlmModel: string;            // vision модель для полного визуального анализа
   fallbackModels: string;      // запятые модели-заменители при 429/ошибках (для всех режимов)
+  requestDelayMs: number;     // задержка между запросами (мс), для избежания rate-limit
   theme: 'light' | 'dark' | 'system';
   language: 'ru';
   extractionDetail: 'low' | 'medium' | 'high';
