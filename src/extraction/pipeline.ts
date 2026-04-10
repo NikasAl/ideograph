@@ -388,7 +388,7 @@ async function finalizeIdeas(opts: {
     ];
 
     const relResponse = await provider.chat(relMessages, { model, fallbackModels, jsonMode: true });
-    relations = parseRelationsResponse(relResponse.content, ideas.map((i) => i.id));
+    relations = parseRelationsResponse(relResponse.content, ideas.map((i) => i.id), ideas.map((i) => ({ id: i.id, title: i.title })));
 
     for (const rel of relations) {
       const sourceIdea = ideas.find((i) => i.id === rel.source);
@@ -592,19 +592,45 @@ function normalizeExtractedIdea(raw: Record<string, unknown>, fallbackPageRange?
   };
 }
 
-function parseRelationsResponse(content: string, validIds: string[]): PipelineResult['relations'] {
+function parseRelationsResponse(
+  content: string,
+  validIds: string[],
+  ideaIdTitleMap: Array<{ id: string; title: string }> = [],
+): PipelineResult['relations'] {
+  // Build title→id map for fallback matching when LLM returns titles instead of IDs
+  const titleToId = new Map<string, string>();
+  for (const item of ideaIdTitleMap) {
+    titleToId.set(item.title.toLowerCase().trim(), item.id);
+  }
+
+  function resolveId(raw: unknown): string | null {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    // Direct ID match
+    if (validIds.includes(s)) return s;
+    // Fallback: match by title
+    const mapped = titleToId.get(s.toLowerCase());
+    if (mapped) return mapped;
+    return null;
+  }
+
   try {
     const json = JSON.parse(content);
     const relations = json.relations || json;
     if (!Array.isArray(relations)) return [];
     return relations
-      .filter((r: Record<string, unknown>) => validIds.includes(String(r.source)) && validIds.includes(String(r.target)))
-      .map((r: Record<string, unknown>) => ({
-        source: String(r.source),
-        target: String(r.target),
-        type: validateEnum(r.type, ['prerequisite', 'elaborates', 'contradicts', 'analogous', 'applies'], 'analogous'),
-        description: r.description ? String(r.description) : undefined,
-      }));
+      .map((r: Record<string, unknown>) => {
+        const source = resolveId(r.source);
+        const target = resolveId(r.target);
+        if (!source || !target || source === target) return null;
+        return {
+          source,
+          target,
+          type: validateEnum(r.type, ['prerequisite', 'elaborates', 'contradicts', 'analogous', 'applies'], 'analogous'),
+          description: r.description ? String(r.description) : undefined,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
   } catch {
     return [];
   }

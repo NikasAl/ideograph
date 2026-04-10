@@ -129,6 +129,9 @@ export class IdeaListView {
           <textarea class="notes-textarea" data-idea-id="${i.id}" placeholder="Ваши заметки...">${this.esc(i.notes)}</textarea>
         </div>
         ${i.userTags?.length ? `<div class="idea-tags">${i.userTags.map(t => `<span class="tag">${this.esc(t)}</span>`).join('')}</div>` : ''}
+        <div class="idea-card-footer">
+          <button class="btn-delete-idea" data-idea-id="${i.id}" title="Удалить идею">🗑️ Удалить</button>
+        </div>
       </div>`;
   }
 
@@ -249,6 +252,46 @@ export class IdeaListView {
         }
 
         el.classList.remove('btn-zathura-loading');
+      });
+    });
+
+    // Delete idea buttons
+    this.container.querySelectorAll('.btn-delete-idea').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = (btn as HTMLElement).dataset.ideaId;
+        if (!id) return;
+
+        // Highlight the card to confirm
+        const card = btn.closest('.idea-card') as HTMLElement | null;
+        if (!card) return;
+
+        if (card.dataset.deleteConfirm === 'true') {
+          // Second click — confirmed
+          await db.ideas.delete(id);
+          // Clean up relations pointing to deleted idea from other ideas
+          const remaining = await db.ideas.where('bookId').equals(this.bookId).toArray();
+          const updates = remaining.filter(i =>
+            i.relations.some(r => r.targetId === id)
+          );
+          for (const idea of updates) {
+            await db.ideas.update(idea.id, {
+              relations: idea.relations.filter(r => r.targetId !== id),
+            });
+          }
+          rerender();
+        } else {
+          // First click — ask for confirmation
+          card.dataset.deleteConfirm = 'true';
+          btn.textContent = '🗑️ Точно удалить?';
+          btn.classList.add('delete-confirm');
+          setTimeout(() => {
+            if (card.dataset.deleteConfirm === 'true') {
+              card.dataset.deleteConfirm = '';
+              btn.textContent = '🗑️ Удалить';
+              btn.classList.remove('delete-confirm');
+            }
+          }, 3000);
+        }
       });
     });
 
