@@ -469,7 +469,12 @@ function buildMarkdownChunks(pages: Array<{ page: number; markdown: string }>): 
 async function cacheTextLayer(bookId: string, pageNumber: number, text: string, hasTextLayer: boolean, qualityScore: number): Promise<void> {
   const existing = await db.pageCache.where({ bookId, pageNumber }).first();
   if (existing) {
-    await db.pageCache.update(existing.id!, { text, hasTextLayer, qualityScore, cachedAt: Date.now() });
+    // Don't overwrite text if OCR already stored a good markdown version
+    const updateData: Record<string, unknown> = { hasTextLayer, qualityScore, cachedAt: Date.now() };
+    if (!existing.ocrMarkdown) {
+      updateData.text = text;
+    }
+    await db.pageCache.update(existing.id!, updateData);
   } else {
     await db.pageCache.add({ bookId, pageNumber, text, hasTextLayer, qualityScore, cachedAt: Date.now() });
   }

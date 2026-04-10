@@ -209,6 +209,7 @@ export class IdeaListView {
         if (container.classList.contains('context-visible')) {
           container.innerHTML = '';
           container.classList.remove('context-visible');
+          el.textContent = '📄 Контекст';
           return;
         }
 
@@ -216,20 +217,25 @@ export class IdeaListView {
         el.classList.add('btn-zathura-loading');
 
         try {
-          const pageTexts: Array<{ page: number; text: string }> = [];
+          const pageTexts: Array<{ page: number; text: string; source: string }> = [];
           for (const p of pages) {
             const cached = await db.pageCache.where({ bookId, pageNumber: p }).first();
-            if (cached?.text) {
-              pageTexts.push({ page: p, text: cached.text });
+            if (!cached) continue;
+            // Prefer OCR markdown (OCR mode) over raw text layer.
+            // Raw text layer is only useful if it has a good quality score (TEXT mode).
+            if (cached.ocrMarkdown) {
+              pageTexts.push({ page: p, text: cached.ocrMarkdown, source: 'OCR' });
+            } else if (cached.hasTextLayer && (cached.qualityScore ?? 0) >= 0.3) {
+              pageTexts.push({ page: p, text: cached.text, source: 'текстовый слой' });
             }
           }
 
           if (pageTexts.length === 0) {
-            container.innerHTML = `<div class="context-empty">Текст страниц не найден в кэше. Запустите анализ заново чтобы заполнить кэш.</div>`;
+            container.innerHTML = `<div class="context-empty">Текст страниц недоступен. Для OCR/VLM режимов контекст сохраняется автоматически. Для текстового режима запустите анализ заново.</div>`;
           } else {
             container.innerHTML = pageTexts.map(pt => `
               <details class="context-section" open>
-                <summary class="context-summary">Страница ${pt.page}</summary>
+                <summary class="context-summary">Страница ${pt.page} <span class="context-source">(${pt.source})</span></summary>
                 <pre class="context-text">${this.esc(pt.text)}</pre>
               </details>
             `).join('');

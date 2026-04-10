@@ -348,6 +348,12 @@
   transition: background 0.15s ease;
 }
 
+.context-source {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .context-summary:hover {
   background: var(--bg-hover);
 }
