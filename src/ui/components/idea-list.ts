@@ -24,6 +24,7 @@ const STAT_COLORS: Record<IdeaStatus, string> = {
 export class IdeaListView {
   private container: HTMLElement;
   private bookId: string;
+  private bookFilePath?: string;
   private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all' };
 
   constructor(container: HTMLElement, bookId: string) {
@@ -33,6 +34,7 @@ export class IdeaListView {
 
   async render(): Promise<void> {
     const book = await db.books.get(this.bookId);
+    this.bookFilePath = book?.filePath;
     const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
     const ideas = this.applyFilters(allIdeas);
 
@@ -94,6 +96,13 @@ export class IdeaListView {
         <div class="idea-meta">
           <span>📄 стр. ${i.pages.join(', ')}</span>
           ${i.relations.length ? `<span>🔗 ${i.relations.length} связей</span>` : ''}
+          ${this.bookFilePath ? `
+            ${i.pages.map((p, idx) => `
+              <button class="btn-zathura" data-page="${p}" data-quote="${this.escAttr(i.quote || '')}" title="Открыть в zathura на стр. ${p}">
+                📖 zathura${idx === 0 && i.quote ? ' + поиск' : ''}
+              </button>
+            `).join('')}
+          ` : ''}
         </div>
         <div class="idea-card-actions">
           <div class="familiarity-group">
@@ -147,6 +156,44 @@ export class IdeaListView {
       new AnalysisPanel(this.container, this.bookId).render();
     });
 
+    // Zathura buttons — copy command to clipboard
+    this.container.querySelectorAll('.btn-zathura').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const page = (btn as HTMLElement).dataset.page;
+        const quote = (btn as HTMLElement).dataset.quote;
+        if (!page || !this.bookFilePath) return;
+
+        const cmd = `zathura -f ${page} '${this.bookFilePath}'`;
+        try {
+          await navigator.clipboard.writeText(cmd);
+          // Brief visual feedback
+          const original = btn.textContent;
+          btn.textContent = '✅ Скопировано!';
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch {
+          // Fallback: select text for manual copy
+          const textarea = document.createElement('textarea');
+          textarea.value = cmd;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+          const original = btn.textContent;
+          btn.textContent = '✅ Скопировано!';
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        }
+
+        // If there's a quote, also copy the search phrase hint
+        if (quote) {
+          const searchHint = `\nПоиск в zathura: /${quote.slice(0, 80)}`;
+          try {
+            const fullCmd = cmd + searchHint;
+            await navigator.clipboard.writeText(fullCmd);
+          } catch { /* already copied base cmd */ }
+        }
+      });
+    });
+
     // Listen for analysis completion — re-render ideas
     document.addEventListener('ideas-updated', rerender, { once: true });
   }
@@ -161,4 +208,9 @@ export class IdeaListView {
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  /** Escape for HTML attribute values (single-quote safe) */
+  private escAttr(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
 }
