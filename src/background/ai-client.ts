@@ -58,7 +58,7 @@ export interface AIModel {
 const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 529]);
 
 /** Status codes that trigger fallback to the next model (permanent for this model) */
-const FALLBACK_STATUS_CODES = new Set([400, 401, 403, 422]);
+const FALLBACK_STATUS_CODES = new Set([400, 401, 403, 404, 422]);
 
 function isRetryableError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -301,9 +301,11 @@ export class ZAIProvider implements AIProvider {
   }
 
   private async doChat(messages: ChatMessage[], options?: ChatOptions, isVision?: boolean): Promise<ChatResponse> {
-    const endpoint = isVision ? '/chat/completions/vision' : '/chat/completions';
+    // z-ai uses the same /chat/completions endpoint for vision (OpenAI-compatible).
+    // Vision is indicated by image_url content parts in messages.
+    const endpoint = '/chat/completions';
     const body: Record<string, unknown> = {
-      model: options?.model || 'glm-4-plus',
+      model: options?.model || 'GLM-4.7-Flash',
       messages,
       temperature: options?.temperature ?? 0.3,
       max_tokens: options?.maxTokens ?? 4096,

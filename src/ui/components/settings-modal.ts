@@ -84,9 +84,9 @@ export class SettingsModal {
             </div>
             <div class="setting-group model-presets">
               <span class="preset-label">Presets — z-ai:</span>
-              <button class="preset-btn" data-target="inp-model" data-value="glm-4-plus">glm-4-plus</button>
-              <button class="preset-btn" data-target="inp-ocr-model" data-value="glm-4v-plus">glm-4v-plus (OCR)</button>
-              <button class="preset-btn" data-target="inp-vlm-model" data-value="glm-4v-plus">glm-4v-plus (VLM)</button>
+              <button class="preset-btn" data-target="inp-model" data-value="GLM-4.7-Flash">GLM-4.7-Flash</button>
+              <button class="preset-btn" data-target="inp-ocr-model" data-value="GLM-4.6V-Flash">GLM-4.6V-Flash (OCR)</button>
+              <button class="preset-btn" data-target="inp-vlm-model" data-value="GLM-4.6V-Flash">GLM-4.6V-Flash (VLM)</button>
             </div>
           </section>
 
