@@ -1,23 +1,10 @@
 import { defineConfig } from 'vite';
 import { crx } from '@crxjs/vite-plugin';
 import { resolve } from 'path';
-import { copyFileSync } from 'fs';
 import manifest from './manifest.json';
 
-/** Vite plugin: copy index.html to dist after build (needed without chrome_url_overrides) */
-function copyIndexHtml() {
-  return {
-    name: 'copy-index-html',
-    closeBundle() {
-      const src = resolve(__dirname, 'index.html');
-      const dest = resolve(__dirname, 'dist/index.html');
-      copyFileSync(src, dest);
-    },
-  };
-}
-
 export default defineConfig({
-  plugins: [crx({ manifest }), copyIndexHtml()],
+  plugins: [crx({ manifest })],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -33,6 +20,9 @@ export default defineConfig({
     sourcemap: process.env.NODE_ENV === 'development',
     minify: process.env.NODE_ENV === 'production' ? 'esbuild' : false,
     rollupOptions: {
+      input: {
+        index: resolve(__dirname, 'index.html'),
+      },
       output: {
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',
