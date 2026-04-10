@@ -47,28 +47,28 @@ export class IdeaListView {
         </div>
         <div class="filters-bar">
           <select id="filter-fam" class="filter-select">
-            <option value="all">Все уровни знакомства</option>
-            <option value="unknown">❌ Не изучал</option>
-            <option value="heard">⚠️ Слышал</option>
-            <option value="known">✅ Знаю</option>
-            <option value="new">🆕 Новые</option>
+            <option value="all"${this.filters.familiarity === 'all' ? ' selected' : ''}>Все уровни знакомства</option>
+            <option value="unknown"${this.filters.familiarity === 'unknown' ? ' selected' : ''}>❌ Не изучал</option>
+            <option value="heard"${this.filters.familiarity === 'heard' ? ' selected' : ''}>⚠️ Слышал</option>
+            <option value="known"${this.filters.familiarity === 'known' ? ' selected' : ''}>✅ Знаю</option>
+            <option value="new"${this.filters.familiarity === 'new' ? ' selected' : ''}>🆕 Новые</option>
           </select>
           <select id="filter-stat" class="filter-select">
-            <option value="all">Все статусы</option>
-            <option value="unseen">Не изучал</option>
-            <option value="in_progress">В процессе</option>
-            <option value="mastered">Освоено</option>
-            <option value="applied">Применяю</option>
-            <option value="confused">Не понятно</option>
+            <option value="all"${this.filters.status === 'all' ? ' selected' : ''}>Все статусы</option>
+            <option value="unseen"${this.filters.status === 'unseen' ? ' selected' : ''}>Не изучал</option>
+            <option value="in_progress"${this.filters.status === 'in_progress' ? ' selected' : ''}>В процессе</option>
+            <option value="mastered"${this.filters.status === 'mastered' ? ' selected' : ''}>Освоено</option>
+            <option value="applied"${this.filters.status === 'applied' ? ' selected' : ''}>Применяю</option>
+            <option value="confused"${this.filters.status === 'confused' ? ' selected' : ''}>Не понятно</option>
           </select>
           <select id="filter-type" class="filter-select">
-            <option value="all">Все типы</option>
-            <option value="definition">Определение</option>
-            <option value="method">Метод</option>
-            <option value="theorem">Теорема</option>
-            <option value="insight">Инсайт</option>
-            <option value="example">Пример</option>
-            <option value="analogy">Аналогия</option>
+            <option value="all"${this.filters.type === 'all' ? ' selected' : ''}>Все типы</option>
+            <option value="definition"${this.filters.type === 'definition' ? ' selected' : ''}>Определение</option>
+            <option value="method"${this.filters.type === 'method' ? ' selected' : ''}>Метод</option>
+            <option value="theorem"${this.filters.type === 'theorem' ? ' selected' : ''}>Теорема</option>
+            <option value="insight"${this.filters.type === 'insight' ? ' selected' : ''}>Инсайт</option>
+            <option value="example"${this.filters.type === 'example' ? ' selected' : ''}>Пример</option>
+            <option value="analogy"${this.filters.type === 'analogy' ? ' selected' : ''}>Аналогия</option>
           </select>
           <span class="idea-count">${ideas.length} / ${allIdeas.length}</span>
         </div>
