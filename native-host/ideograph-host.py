@@ -22,8 +22,9 @@ Messages supported:
     → { "status": "ok", "version": "1.0" }
 
   { "action": "openZathura", "filePath": "...", "searchPhrase": "...", "page": 17 }
-    → { "status": "ok", "command": "..." }
+    → { "status": "ok", "command": "...", "searchHint": "..." }
     or { "status": "error", "error": "..." }
+    Note: searchPhrase triggers both zathura's -f and shows a hint to user.
 
   { "action": "exec", "command": "..." }
     → { "status": "ok", "exitCode": 0 }
@@ -113,11 +114,18 @@ def handle_open_zathura(msg):
 
     # Build zathura command
     # -P N = open at page number (1-based)
+    # -f, --find = search for text when opening
     # --fork = run in background (non-blocking)
     cmd = ['zathura', '--fork']
 
     if page:
         cmd.extend(['-P', str(page)])
+
+    if search_phrase:
+        # Escape special characters for zathura find
+        # Truncate to reasonable length
+        search_escaped = search_phrase[:500].replace('\n', ' ').replace('\r', '')
+        cmd.extend(['-f', search_escaped])
 
     cmd.append(file_path)
 
