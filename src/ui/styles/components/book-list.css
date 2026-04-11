@@ -90,6 +90,21 @@
   font-size: 13px;
   color: var(--text-muted);
   margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toc-badge {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  white-space: nowrap;
+}
+
+.toc-badge.toc-empty {
+  opacity: 0.5;
 }
 
 .book-actions {

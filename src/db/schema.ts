@@ -32,10 +32,14 @@ export const EXTRACTION_MODES: ExtractionModeInfo[] = [
 ];
 
 export interface TOCEntry {
-  title: string;
-  page: number;
-  level: number; // 1=chapter, 2=section, 3=subsection
-  parentId?: string;
+  id: string;                    // unique: "bookId_toc_N"
+  title: string;                 // chapter/section title (Russian)
+  page: number;                  // start page (1-based)
+  pageEnd?: number;              // end page (auto-computed)
+  level: number;                 // 1=chapter, 2=section, 3=subsection
+  parentId?: string;             // parent TOCEntry.id (for hierarchy)
+  summary?: string;              // brief description of content (LLM-generated)
+  ideasCount?: number;           // cached count of linked ideas
 }
 
 export interface Book {

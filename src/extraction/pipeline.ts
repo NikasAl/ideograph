@@ -16,6 +16,8 @@ import { buildVisionMessage } from './vlm-extractor.js';
 import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DETAIL_INSTRUCTIONS } from './prompts/extract-ideas.js';
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
+import { findChapterForPage } from './toc-extractor.js';
+import { chapterContextBlock } from './prompts/toc-prompts.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,6 +71,9 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
 
   const detailInstruction = DETAIL_INSTRUCTIONS[detail];
 
+  // Chapter context from TOC (if available) — used in text pipeline
+  const toc = book.tableOfContents || [];
+
   // === Phase 0: Evaluate text layer quality for caching and logging ===
   onProgress?.('Оценка текстового слоя...', 5);
   let firstPageText;
@@ -91,7 +96,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   try {
     // === MODE: TEXT ===
     if (effectiveMode === 'text') {
-      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc });
     }
 
     // === MODE: OCR ===
@@ -142,8 +147,9 @@ async function runTextPipeline(opts: {
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
+  toc: import('../db/schema.js').TOCEntry[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
   const pagesText = await extractTextFromPDFRange(pdfData, pageFrom, pageTo);
@@ -168,8 +174,13 @@ async function runTextPipeline(opts: {
     if (i > 0 && requestDelayMs) await sleep(requestDelayMs);
 
     try {
+      const chapter = findChapterForPage(chunks[i].pageRange[0], toc);
+      const chapterContext = chapter
+        ? chapterContextBlock(chapter.title, chapter.page, chapter.pageEnd ?? chapter.page, chapter.summary)
+        : null;
+
       const messages: ChatMessage[] = [
-        { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction },
+        { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction + (chapterContext || '') },
         { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
       ];
 
@@ -357,6 +368,7 @@ async function finalizeIdeas(opts: {
   const ideas = uniqueIdeas.map((extracted, idx) => ({
     id: `${bookId}_p${pageFrom}-${pageTo}_${idx}`,
     bookId,
+    chapterId: undefined as string | undefined,
     title: extracted.title,
     summary: extracted.summary,
     quote: extracted.quote,
@@ -402,13 +414,24 @@ async function finalizeIdeas(opts: {
     }
   }
 
+  // === Attach chapterId from TOC ===
+  const currentBook = await db.books.get(bookId);
+  const chapterToc = currentBook ? (currentBook.tableOfContents || []) : [];
+  if (chapterToc.length > 0) {
+    for (const idea of ideas) {
+      const chapter = findChapterForPage(idea.pages[0], chapterToc);
+      if (chapter) {
+        idea.chapterId = chapter.id;
+      }
+    }
+  }
+
   // === Save to DB ===
   onProgress?.('Сохранение...', 95);
   await db.ideas.bulkPut(ideas);
-  const book = await db.books.get(bookId);
-  if (book) {
+  if (currentBook) {
     await db.books.update(bookId, {
-      lastAnalyzedPage: Math.max(book.lastAnalyzedPage, pageTo),
+      lastAnalyzedPage: Math.max(currentBook.lastAnalyzedPage, pageTo),
       extractionMode: qualityReport.suggestedMode,
       updatedAt: Date.now(),
     });

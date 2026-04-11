@@ -7,12 +7,13 @@ import { BookListView } from './components/book-list.js';
 import { IdeaListView } from './components/idea-list.js';
 import { IdeaGraphView } from './components/idea-graph.js';
 import { ModelTestView } from './components/model-test.js';
+import { TOCPanel } from './components/toc-panel.js';
 import { SettingsModal } from './components/settings-modal.js';
 import { getSettings } from '../db/index.js';
 import { restoreAllHandles } from './utils/file-store.js';
 import type { Settings } from '../db/schema.js';
 
-type ViewType = 'library' | 'ideas' | 'graph' | 'model-test';
+type ViewType = 'library' | 'ideas' | 'graph' | 'model-test' | 'toc';
 
 class App {
   private currentView: ViewType = 'library';
@@ -59,6 +60,9 @@ class App {
           <button class="nav-btn ${this.currentView === 'graph' ? 'active' : ''}" data-view="graph" ${!this.selectedBookId ? 'disabled' : ''}>
             🕸️ Граф
           </button>
+          <button class="nav-btn ${this.currentView === 'toc' ? 'active' : ''}" data-view="toc" ${!this.selectedBookId ? 'disabled' : ''}>
+            📑 Оглавление
+          </button>
         </nav>
         <div class="app-actions">
           <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">🧪</button>
@@ -104,6 +108,11 @@ class App {
       case 'model-test':
         new ModelTestView(container).render();
         break;
+      case 'toc':
+        if (this.selectedBookId) {
+          new TOCPanel(container, this.selectedBookId).render();
+        }
+        break;
     }
   }
 
@@ -141,6 +150,12 @@ class App {
     document.addEventListener('book-selected', ((e: CustomEvent) => {
       this.selectedBookId = e.detail.bookId;
       this.currentView = 'ideas';
+      this.render();
+    }) as EventListener);
+
+    document.addEventListener('open-toc', ((e: CustomEvent) => {
+      this.selectedBookId = e.detail.bookId;
+      this.currentView = 'toc';
       this.render();
     }) as EventListener);
 

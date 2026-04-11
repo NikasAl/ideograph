@@ -26,7 +26,7 @@ export class IdeaListView {
   private container: HTMLElement;
   private bookId: string;
   private bookFilePath?: string;
-  private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all' };
+  private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all', chapter: 'all' as string };
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -36,8 +36,17 @@ export class IdeaListView {
   async render(): Promise<void> {
     const book = await db.books.get(this.bookId);
     this.bookFilePath = book?.filePath;
+    const toc = book?.tableOfContents || [];
+    const chapters = toc.filter(e => e.level === 1);
     const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
     const ideas = this.applyFilters(allIdeas);
+
+    const chapterOptions = chapters.length > 0
+      ? `<select id="filter-chapter" class="filter-select">
+          <option value="all"${this.filters.chapter === 'all' ? ' selected' : ''}>Все главы</option>
+          ${chapters.map(ch => `<option value="${ch.id}"${this.filters.chapter === ch.id ? ' selected' : ''}>${this.esc(ch.title)}</option>`).join('')}
+        </select>`
+      : '';
 
     this.container.innerHTML = `
       <div class="idea-list-view">
@@ -70,6 +79,7 @@ export class IdeaListView {
             <option value="example"${this.filters.type === 'example' ? ' selected' : ''}>Пример</option>
             <option value="analogy"${this.filters.type === 'analogy' ? ' selected' : ''}>Аналогия</option>
           </select>
+          ${chapterOptions}
           <span class="idea-count">${ideas.length} / ${allIdeas.length}</span>
         </div>
         <div class="ideas-container">
@@ -140,6 +150,7 @@ export class IdeaListView {
     document.getElementById('filter-fam')?.addEventListener('change', (e) => { this.filters.familiarity = (e.target as HTMLSelectElement).value as typeof this.filters.familiarity; rerender(); });
     document.getElementById('filter-stat')?.addEventListener('change', (e) => { this.filters.status = (e.target as HTMLSelectElement).value as typeof this.filters.status; rerender(); });
     document.getElementById('filter-type')?.addEventListener('change', (e) => { this.filters.type = (e.target as HTMLSelectElement).value as typeof this.filters.type; rerender(); });
+    document.getElementById('filter-chapter')?.addEventListener('change', (e) => { this.filters.chapter = (e.target as HTMLSelectElement).value; rerender(); });
 
     this.container.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -304,6 +315,7 @@ export class IdeaListView {
       if (this.filters.familiarity !== 'all' && i.familiarity !== this.filters.familiarity) return false;
       if (this.filters.status !== 'all' && i.status !== this.filters.status) return false;
       if (this.filters.type !== 'all' && i.type !== this.filters.type) return false;
+      if (this.filters.chapter !== 'all' && i.chapterId !== this.filters.chapter) return false;
       return true;
     });
   }
