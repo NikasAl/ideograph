@@ -73,6 +73,7 @@ function isFallbackError(err: unknown): boolean {
   // (which indicates the upstream provider rejected the request, e.g. location restrictions)
   if (FALLBACK_STATUS_CODES.has(code)) return true;
   if (msg.includes('Provider returned error')) return true;
+  if (msg.includes('вернул пустой ответ')) return true;
   return false;
 }
 
@@ -181,6 +182,9 @@ export class OpenRouterProvider implements AIProvider {
       body.response_format = { type: 'json_object' };
     }
     const data = await this.request('/chat/completions', body) as Record<string, unknown>;
+    if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+      throw new Error(`OpenRouter вернул пустой ответ: ${JSON.stringify(data).slice(0, 500)}`);
+    }
     const choice = (data.choices as Array<Record<string, unknown>>)[0];
     const message = choice.message as Record<string, unknown>;
     const usage = data.usage as Record<string, unknown> | undefined;
@@ -315,6 +319,9 @@ export class ZAIProvider implements AIProvider {
       body.response_format = { type: 'json_object' };
     }
     const data = await this.request(endpoint, body) as Record<string, unknown>;
+    if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+      throw new Error(`z-ai вернул пустой ответ: ${JSON.stringify(data).slice(0, 500)}`);
+    }
     const choice = (data.choices as Array<Record<string, unknown>>)[0];
     const message = choice.message as Record<string, unknown>;
     const usage = data.usage as Record<string, unknown> | undefined;
