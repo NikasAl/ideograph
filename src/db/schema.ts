@@ -192,3 +192,22 @@ export interface LLMRelation {
   type: RelationType;
   description?: string;
 }
+
+// --- Model test ratings ---
+
+export interface ModelRating {
+  id?: number;
+  modelId: string;
+  provider: string;
+  testedAt: number;
+  simplePass: boolean;
+  simpleTimeMs: number;
+  instructionPass: boolean;
+  instructionTimeMs: number;
+  jsonPass: boolean;
+  jsonTimeMs: number;
+  extractionPass: boolean;
+  extractionTimeMs: number;
+  userRating?: number; // 1-5 manual rating
+  totalScore: number; // computed: 0-100
+}

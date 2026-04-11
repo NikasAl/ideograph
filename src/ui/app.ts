@@ -6,12 +6,13 @@ import './styles/global.css';
 import { BookListView } from './components/book-list.js';
 import { IdeaListView } from './components/idea-list.js';
 import { IdeaGraphView } from './components/idea-graph.js';
+import { ModelTestView } from './components/model-test.js';
 import { SettingsModal } from './components/settings-modal.js';
 import { getSettings } from '../db/index.js';
 import { restoreAllHandles } from './utils/file-store.js';
 import type { Settings } from '../db/schema.js';
 
-type ViewType = 'library' | 'ideas' | 'graph';
+type ViewType = 'library' | 'ideas' | 'graph' | 'model-test';
 
 class App {
   private currentView: ViewType = 'library';
@@ -60,6 +61,7 @@ class App {
           </button>
         </nav>
         <div class="app-actions">
+          <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">🧪</button>
           <button class="icon-btn btn-about" id="btn-about" title="О расширении">ℹ️</button>
           <button class="icon-btn" id="btn-settings" title="Настройки">⚙️</button>
         </div>
@@ -99,6 +101,9 @@ class App {
           new IdeaGraphView(container, this.selectedBookId).render();
         }
         break;
+      case 'model-test':
+        new ModelTestView(container).render();
+        break;
     }
   }
 
@@ -124,6 +129,11 @@ class App {
     document.getElementById('btn-settings')?.addEventListener('click', () => {
       new SettingsModal().open();
     });
+
+    document.getElementById('btn-model-test')?.addEventListener('click', () => {
+      this.currentView = 'model-test';
+      this.render();
+    });
   }
 
   /** Bind document-level listeners (called once) */
@@ -139,6 +149,12 @@ class App {
         this.settings = s;
         this.applyTheme(s.theme);
       });
+    }) as EventListener);
+
+    // Navigate event from sub-views (e.g. back button from model-test)
+    document.addEventListener('navigate', ((e: CustomEvent) => {
+      this.currentView = e.detail.view as ViewType;
+      this.render();
     }) as EventListener);
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

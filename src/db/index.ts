@@ -6,6 +6,7 @@ import type {
   PageTextCache,
   AnalysisLog,
   FileHandleRecord,
+  ModelRating,
 } from './schema.js';
 
 class IdeographDB extends Dexie {
@@ -15,6 +16,7 @@ class IdeographDB extends Dexie {
   pageCache!: Table<PageTextCache, number>;
   analysisLog!: Table<AnalysisLog, number>;
   fileHandles!: Table<FileHandleRecord, number>;
+  modelRatings!: Table<ModelRating, number>;
 
   constructor() {
     super('IdeographDB');
@@ -30,6 +32,11 @@ class IdeographDB extends Dexie {
     // v2: add fileHandles table for persisting FileSystemFileHandle
     this.version(2).stores({
       fileHandles: '++id, bookId',
+    });
+
+    // v3: add modelRatings table for model testing/benchmark
+    this.version(3).stores({
+      modelRatings: '++id, modelId, provider, testedAt, totalScore',
     });
   }
 }
@@ -83,4 +90,30 @@ export async function loadFileHandle(bookId: string): Promise<FileSystemFileHand
 
 export async function removeFileHandle(bookId: string): Promise<void> {
   await db.fileHandles.where('bookId').equals(bookId).delete();
+}
+
+// ---- Model ratings helpers ----
+
+export async function saveModelRating(rating: ModelRating): Promise<number> {
+  return db.modelRatings.add(rating);
+}
+
+export async function getLatestModelRating(modelId: string, provider: string): Promise<ModelRating | undefined> {
+  return db.modelRatings
+    .where({ modelId, provider })
+    .reverse()
+    .sortBy('testedAt')
+    .then((rows) => rows[0]);
+}
+
+export async function getAllModelRatings(): Promise<ModelRating[]> {
+  return db.modelRatings.orderBy('testedAt').reverse().toArray();
+}
+
+export async function getBestModels(limit: number = 20): Promise<ModelRating[]> {
+  return db.modelRatings.orderBy('totalScore').reverse().limit(limit).toArray();
+}
+
+export async function clearModelRatings(): Promise<void> {
+  return db.modelRatings.clear();
 }
