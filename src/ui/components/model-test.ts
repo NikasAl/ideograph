@@ -580,11 +580,11 @@ export class ModelTestView {
       this.applyFilters();
 
       // Show model list section
-      const section = this.container.querySelector('#mt-model-list-section');
+      const section = this.container.querySelector('#mt-model-list-section') as HTMLElement | null;
       if (section) section.style.display = '';
 
       // Show test section
-      const testSection = this.container.querySelector('#mt-test-section');
+      const testSection = this.container.querySelector('#mt-test-section') as HTMLElement | null;
       if (testSection) testSection.style.display = '';
 
       countEl.textContent = `Найдено: ${this.allModels.length} моделей`;
@@ -680,7 +680,7 @@ export class ModelTestView {
     const countEl = this.container.querySelector('#mt-selected-count');
     if (countEl) countEl.textContent = String(this.selectedModelIds.size);
 
-    const runBtn = this.container.querySelector('#mt-run-tests') as HTMLElement | null;
+    const runBtn = this.container.querySelector('#mt-run-tests') as HTMLButtonElement | null;
     if (runBtn) {
       runBtn.disabled = this.selectedModelIds.size === 0;
       runBtn.textContent = this.selectedModelIds.size > 0
@@ -906,7 +906,7 @@ export class ModelTestView {
     if (modelEl) modelEl.textContent = `${modelId} — ${phase}`;
     if (statsEl) statsEl.textContent = `${step}/${total} (${this.progressPercent}%)`;
     if (fillEl) {
-      fillEl.style.width = `${this.progressPercent}%`;
+      (fillEl as HTMLElement).style.width = `${this.progressPercent}%`;
       fillEl.classList.remove('complete', 'error');
     }
   }
