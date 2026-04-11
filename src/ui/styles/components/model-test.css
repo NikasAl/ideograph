@@ -640,6 +640,18 @@
   border-color: #7f1d1d;
 }
 
+.mt-error-success {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+[data-theme="dark"] .mt-error-success {
+  background: #052e16;
+  color: #86efac;
+  border-color: #166534;
+}
+
 /* --- Cancel button --- */
 .mt-btn-cancel {
   padding: 8px 20px;
@@ -701,5 +713,372 @@
 
   .mt-result-model {
     max-width: 150px;
+  }
+}
+
+/* ============================================================
+   Detail panel (expandable per result row)
+   ============================================================ */
+
+.mt-detail-row td {
+  padding: 0 !important;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.mt-detail-panel {
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mt-detail-test-item {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-card);
+}
+
+.mt-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.mt-detail-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.mt-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.mt-detail-prompt,
+.mt-detail-response {
+  margin-top: 8px;
+}
+
+.mt-detail-pre {
+  font-family: 'SarasaMonoSC', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.mt-detail-pre::-webkit-scrollbar {
+  width: 5px;
+}
+
+.mt-detail-pre::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+
+.mt-detail-pre::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.mt-detail-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--danger);
+  padding: 6px 10px;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: var(--radius-sm);
+}
+
+.mt-btn-toggle-full {
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+/* ============================================================
+   Test configuration section
+   ============================================================ */
+
+.mt-config-details {
+  border: none;
+}
+
+.mt-config-summary {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.mt-config-summary:hover {
+  color: var(--accent);
+}
+
+.mt-config-body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mt-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.mt-btn-add {
+  padding: 6px 14px;
+  border: 1px dashed var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mt-btn-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-style: solid;
+}
+
+.mt-test-config-item {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.mt-test-config-item:hover {
+  border-color: var(--accent);
+}
+
+.mt-test-config-builtin {
+  opacity: 0.85;
+  background: var(--bg-secondary);
+}
+
+.mt-test-config-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mt-test-name-input {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mt-test-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.mt-test-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mt-test-badge-builtin {
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.mt-btn-delete {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.mt-btn-delete:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.mt-test-prompt-input {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: 'SarasaMonoSC', 'Fira Code', monospace;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.mt-test-prompt-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.mt-test-prompt-input[readonly] {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.mt-test-config-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mt-test-config-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mt-test-config-field input[type="text"],
+.mt-test-config-field input[type="number"] {
+  padding: 4px 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  width: 80px;
+}
+
+.mt-test-config-field input[type="text"] {
+  width: 200px;
+}
+
+.mt-test-config-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mt-test-config-checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.mt-test-config-field input[readonly] {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* ============================================================
+   History per-test badges
+   ============================================================ */
+
+.mt-history-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mt-history-tests {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.mt-history-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.mt-history-badge.mt-result-pass {
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.mt-history-badge.mt-result-fail {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.mt-history-stars {
+  color: #f59e0b;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+/* --- Detail panel responsive --- */
+@media (max-width: 768px) {
+  .mt-detail-panel {
+    padding: 12px;
+  }
+
+  .mt-test-config-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mt-test-config-field input[type="text"] {
+    width: 100%;
+  }
+
+  .mt-test-config-field input[type="number"] {
+    width: 100%;
+  }
+
+  .mt-history-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
 }

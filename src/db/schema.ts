@@ -200,6 +200,7 @@ export interface ModelRating {
   modelId: string;
   provider: string;
   testedAt: number;
+  // Legacy fields (kept for backward compatibility)
   simplePass: boolean;
   simpleTimeMs: number;
   instructionPass: boolean;
@@ -210,4 +211,6 @@ export interface ModelRating {
   extractionTimeMs: number;
   userRating?: number; // 1-5 manual rating
   totalScore: number; // computed: 0-100
+  // New dynamic format
+  testDetailsJson?: string; // JSON array of per-test details
 }

@@ -4,7 +4,7 @@
 
 import '../styles/components/model-test.css';
 import { getSettings } from '../../db/index.js';
-import { saveModelRating, clearModelRatings, getBestModels } from '../../db/index.js';
+import { saveModelRating, clearModelRatings, getAllModelRatings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
 import type { AIProvider, ChatMessage } from '../../background/ai-client.js';
 import type { ModelRating, Settings } from '../../db/schema.js';
@@ -22,35 +22,38 @@ interface DiscoveredModel {
   completionPrice?: number;
 }
 
+interface TestDetailItem {
+  testId: string;
+  testName: string;
+  pass: boolean;
+  timeMs: number;
+  error?: string;
+  prompt: string;
+  response?: string;
+}
+
 interface TestResult {
   modelId: string;
   provider: string;
-  simplePass: boolean;
-  simpleTimeMs: number;
-  simpleError?: string;
-  instructionPass: boolean;
-  instructionTimeMs: number;
-  instructionError?: string;
-  jsonPass: boolean;
-  jsonTimeMs: number;
-  jsonError?: string;
-  extractionPass: boolean;
-  extractionTimeMs: number;
-  extractionError?: string;
   totalScore: number;
+  testResults: TestDetailItem[];
+}
+
+interface TestDefinition {
+  id: string;
+  name: string;
+  prompt: string;         // user message
+  systemPrompt?: string;  // optional system message
+  maxTokens: number;
+  jsonMode: boolean;
+  validate: (response: string) => boolean;
+  weight: number;         // score points
+  isBuiltIn?: boolean;
 }
 
 // ============================================================
-// Test prompts
+// Built-in test definitions
 // ============================================================
-
-const SIMPLE_TEST_PROMPT = 'Ответь одним словом: да';
-
-const INSTRUCTION_TEST_PROMPT =
-  'Напиши ровно три строки: первую с числом 42, вторую со словом \'тест\', третью пустую.';
-
-const JSON_TEST_PROMPT =
-  'Верни JSON: {"color": "blue", "count": 5}';
 
 const EXTRACTION_SYSTEM_PROMPT = `Ты — аналитик знаний. Твоя задача — извлечь из текста все самостоятельные идеи, концепции, определения, утверждения и методы.
 
@@ -75,11 +78,99 @@ const EXTRACTION_SAMPLE_TEXT = `Линейная алгебра — раздел
 
 Аналогия: векторное пространство подобно координатной плоскости, но вместо двух направлений может быть любое (конечное) число независимых направлений.`;
 
-const EXTRACTION_USER_PROMPT = `Вот текст. Извлеки из него идеи.
+/** Strip markdown code fences from response */
+function stripCodeFences(text: string): string {
+  return text.replace(/^```(?:json)?\s*/gm, '').replace(/\s*```$/gm, '').trim();
+}
 
----
-${EXTRACTION_SAMPLE_TEXT}
----`;
+/** Default built-in tests — can be overridden by user */
+function getDefaultTests(): TestDefinition[] {
+  return [
+    {
+      id: 'simple', name: 'Простой ответ',
+      prompt: 'Ответь одним словом: да',
+      maxTokens: 50, jsonMode: false, weight: 20, isBuiltIn: true,
+      validate: (r) => {
+        const a = r.toLowerCase().trim();
+        return a.includes('да') || a.includes('yes');
+      },
+    },
+    {
+      id: 'instruction', name: 'Инструкции',
+      prompt: 'Напиши ровно три строки: первую с числом 42, вторую со словом \'тест\', третью пустую.',
+      maxTokens: 200, jsonMode: false, weight: 25, isBuiltIn: true,
+      validate: (r) => {
+        // Strip code fences, find consecutive lines with 42 and тест
+        const text = stripCodeFences(r);
+        const lines = text.split('\n').map((l) => l.trim());
+        let found42 = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].includes('42')) {
+            found42 = i;
+            break;
+          }
+        }
+        if (found42 < 0) return false;
+        // Next non-empty line should contain 'тест'
+        for (let i = found42 + 1; i < lines.length; i++) {
+          if (lines[i] === '') continue; // skip empty lines between
+          return lines[i].includes('тест');
+        }
+        return false;
+      },
+    },
+    {
+      id: 'json', name: 'JSON',
+      prompt: 'Верни JSON: {"color": "blue", "count": 5}',
+      maxTokens: 100, jsonMode: true, weight: 25, isBuiltIn: true,
+      validate: (r) => {
+        try {
+          const p = JSON.parse(stripCodeFences(r));
+          return p.color === 'blue' && p.count === 5;
+        } catch { return false; }
+      },
+    },
+    {
+      id: 'extraction', name: 'Извлечение идей',
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+      prompt: `Вот текст. Извлеки из него идеи.\n\n---\n${EXTRACTION_SAMPLE_TEXT}\n---`,
+      maxTokens: 4096, jsonMode: true, weight: 30, isBuiltIn: true,
+      validate: (r) => {
+        try {
+          const json = JSON.parse(stripCodeFences(r));
+          const ideas = json.ideas || json;
+          if (Array.isArray(ideas) && ideas.length > 0) {
+            const first = ideas[0];
+            return typeof first.title === 'string' && first.title.length > 0 &&
+              typeof first.summary === 'string' && first.summary.length > 0;
+          }
+          return false;
+        } catch { return false; }
+      },
+    },
+  ];
+}
+
+const LS_CUSTOM_TESTS_KEY = 'ideograph_custom_tests';
+
+function loadCustomTests(): TestDefinition[] {
+  try {
+    const raw = localStorage.getItem(LS_CUSTOM_TESTS_KEY);
+    if (!raw) return [];
+    const tests: TestDefinition[] = JSON.parse(raw);
+    return tests;
+  } catch { return []; }
+}
+
+function saveCustomTests(tests: TestDefinition[]): void {
+  localStorage.setItem(LS_CUSTOM_TESTS_KEY, JSON.stringify(tests));
+}
+
+function getActiveTests(): TestDefinition[] {
+  const builtIn = getDefaultTests();
+  const custom = loadCustomTests();
+  return [...builtIn, ...custom];
+}
 
 // ============================================================
 // z-ai hardcoded models
@@ -114,12 +205,13 @@ function formatPrice(pricePerM: number | undefined): string {
   return `$${pricePerM.toFixed(2)}/M`;
 }
 
-function computeScore(r: TestResult): number {
+function computeScore(passResults: Array<{ testId: string; pass: boolean }>): number {
+  const tests = getActiveTests();
   let score = 0;
-  if (r.simplePass) score += 20;
-  if (r.instructionPass) score += 25;
-  if (r.jsonPass) score += 25;
-  if (r.extractionPass) score += 30;
+  for (const pr of passResults) {
+    const def = tests.find(t => t.id === pr.testId);
+    if (def && pr.pass) score += def.weight;
+  }
   return score;
 }
 
@@ -131,6 +223,11 @@ function starsHtml(rating: number | undefined): string {
   }
   html += '</span>';
   return html;
+}
+
+function truncateText(text: string, maxLen: number = 300): string {
+  if (!text || text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + '…';
 }
 
 // ============================================================
@@ -164,12 +261,16 @@ export class ModelTestView {
   // Test options
   private runExtractionTest = true;
 
+  // Test config state
+  private customTests: TestDefinition[] = [];
+
   constructor(container: HTMLElement) {
     this.container = container;
   }
 
   async render(): Promise<void> {
     this.settings = await getSettings();
+    this.customTests = loadCustomTests();
     this.renderHTML();
     this.bindEvents();
   }
@@ -180,6 +281,7 @@ export class ModelTestView {
 
   private renderHTML(): void {
     const s = this.settings!;
+    const activeTests = getActiveTests();
 
     this.container.innerHTML = `
       <div class="model-test-view">
@@ -296,6 +398,22 @@ export class ModelTestView {
           </div>
         </div>
 
+        <!-- Configure Tests (collapsible) -->
+        <div class="mt-section" id="mt-test-config-section" style="display:none;">
+          <details class="mt-config-details">
+            <summary class="mt-config-summary">⚙️ Настроить тесты (${activeTests.length})</summary>
+            <div class="mt-config-body">
+              <div id="mt-test-config-list">
+                ${this.renderTestConfigList(activeTests)}
+              </div>
+              <div class="mt-config-actions">
+                <button class="mt-btn-add" id="mt-add-test">➕ Добавить тест</button>
+                <button class="primary-btn" id="mt-save-tests" style="margin-left:auto;">💾 Сохранить</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
         <!-- Error display -->
         <div id="mt-error-container"></div>
 
@@ -312,16 +430,13 @@ export class ModelTestView {
               <thead>
                 <tr>
                   <th>Модель</th>
-                  <th>Простой</th>
-                  <th>Инструкции</th>
-                  <th>JSON</th>
-                  <th>Извлечение</th>
+                  ${activeTests.map(t => `<th>${escapeHtml(t.name)}</th>`).join('')}
                   <th>Оценка</th>
                   <th>Балл</th>
                 </tr>
               </thead>
               <tbody id="mt-results-body">
-                ${this.renderResultRows()}
+                ${this.renderResultRows(activeTests)}
               </tbody>
             </table>
           </div>
@@ -371,49 +486,159 @@ export class ModelTestView {
     }).join('');
   }
 
-  private renderResultRows(): string {
+  private renderResultRows(activeTests: TestDefinition[]): string {
     const results = Array.from(this.testResults.values()).sort((a, b) => b.totalScore - a.totalScore);
     if (results.length === 0) {
-      return `<tr><td colspan="7" class="mt-empty">Нет результатов</td></tr>`;
+      return `<tr><td colspan="${activeTests.length + 3}" class="mt-empty">Нет результатов</td></tr>`;
     }
 
     return results.map((r) => {
       const scoreClass = r.totalScore >= 70 ? 'high' : r.totalScore >= 40 ? 'medium' : 'low';
+      const testCells = activeTests.map(t => {
+        const detail = r.testResults.find(tr => tr.testId === t.id);
+        if (!detail) {
+          return `<td><div class="mt-result-cell"><span class="mt-result-skip">—</span></div></td>`;
+        }
+        return `
+          <td>
+            <div class="mt-result-cell">
+              <span class="${detail.pass ? 'mt-result-pass' : 'mt-result-fail'}">${detail.pass ? '✅' : '❌'}</span>
+              <span class="mt-result-time">${detail.timeMs}ms</span>
+            </div>
+          </td>
+        `;
+      }).join('');
+
       return `
-        <tr>
+        <tr class="mt-result-row" data-result-model-id="${escapeHtml(r.modelId)}" style="cursor:pointer;">
           <td>
             <div class="mt-result-model">${escapeHtml(r.modelId)}</div>
             <div class="mt-result-provider">${escapeHtml(r.provider)}</div>
           </td>
-          <td>
-            <div class="mt-result-cell">
-              <span class="${r.simplePass ? 'mt-result-pass' : 'mt-result-fail'}">${r.simplePass ? '✅' : '❌'}</span>
-              <span class="mt-result-time">${r.simpleTimeMs}ms</span>
-            </div>
-          </td>
-          <td>
-            <div class="mt-result-cell">
-              <span class="${r.instructionPass ? 'mt-result-pass' : 'mt-result-fail'}">${r.instructionPass ? '✅' : '❌'}</span>
-              <span class="mt-result-time">${r.instructionTimeMs}ms</span>
-            </div>
-          </td>
-          <td>
-            <div class="mt-result-cell">
-              <span class="${r.jsonPass ? 'mt-result-pass' : 'mt-result-fail'}">${r.jsonPass ? '✅' : '❌'}</span>
-              <span class="mt-result-time">${r.jsonTimeMs}ms</span>
-            </div>
-          </td>
-          <td>
-            <div class="mt-result-cell">
-              <span class="${r.extractionPass ? 'mt-result-pass' : 'mt-result-fail'}">${r.extractionPass ? '✅' : '❌'}</span>
-              <span class="mt-result-time">${r.extractionTimeMs}ms</span>
-            </div>
-          </td>
+          ${testCells}
           <td data-result-model="${escapeHtml(r.modelId)}">${starsHtml(undefined)}</td>
           <td><span class="mt-result-score ${scoreClass}">${r.totalScore}</span></td>
         </tr>
+        <tr class="mt-detail-row" data-detail-model-id="${escapeHtml(r.modelId)}" style="display:none;">
+          <td colspan="${activeTests.length + 3}">
+            <div class="mt-detail-panel">
+              ${this.renderDetailPanel(r)}
+            </div>
+          </td>
+        </tr>
       `;
     }).join('');
+  }
+
+  private renderDetailPanel(result: TestResult): string {
+    if (result.testResults.length === 0) {
+      return '<div class="mt-empty">Нет данных</div>';
+    }
+
+    return result.testResults.map(tr => {
+      const responseHtml = tr.response
+        ? `<div class="mt-detail-response">
+            <div class="mt-detail-label">Ответ:</div>
+            <pre class="mt-detail-pre" data-full-text="${escapeHtml(tr.response)}" data-truncated="${escapeHtml(truncateText(tr.response, 500))}">${escapeHtml(truncateText(tr.response, 500))}</pre>
+            ${tr.response.length > 500 ? `<button class="mt-btn-toggle-full mt-btn-export">Показать полностью</button>` : ''}
+          </div>`
+        : '';
+
+      const errorHtml = tr.error
+        ? `<div class="mt-detail-error">⚠️ Ошибка: ${escapeHtml(tr.error)}</div>`
+        : '';
+
+      return `
+        <div class="mt-detail-test-item">
+          <div class="mt-detail-header">
+            <span class="mt-detail-name">${escapeHtml(tr.testName)}</span>
+            <span class="${tr.pass ? 'mt-result-pass' : 'mt-result-fail'}">${tr.pass ? '✅ Пройден' : '❌ Не пройден'}</span>
+            <span class="mt-result-time">${tr.timeMs}мс</span>
+          </div>
+          <div class="mt-detail-prompt">
+            <div class="mt-detail-label">Запрос:</div>
+            <pre class="mt-detail-pre">${escapeHtml(tr.prompt)}</pre>
+          </div>
+          ${responseHtml}
+          ${errorHtml}
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ============================================================
+  // Test configuration rendering
+  // ============================================================
+
+  private renderTestConfigList(allTests: TestDefinition[]): string {
+    const builtInTests = getDefaultTests();
+    return allTests.map((t, idx) => {
+      const isBuiltin = t.isBuiltIn || builtInTests.some(b => b.id === t.id);
+      const badge = isBuiltin ? '<span class="mt-test-badge mt-test-badge-builtin">встроенный</span>' : '';
+      const deleteBtn = isBuiltin ? '' : `<button class="mt-btn-delete" data-test-idx="${idx}">🗑</button>`;
+      const readonly = isBuiltin ? 'readonly' : '';
+
+      return `
+        <div class="mt-test-config-item ${isBuiltin ? 'mt-test-config-builtin' : ''}" data-test-id="${escapeHtml(t.id)}">
+          <div class="mt-test-config-header">
+            <input class="mt-test-name-input" type="text" value="${escapeHtml(t.name)}" placeholder="Название теста" ${readonly} />
+            ${badge}
+            ${deleteBtn}
+          </div>
+          <textarea class="mt-test-prompt-input" placeholder="Запрос для модели..." ${readonly}>${escapeHtml(t.prompt)}</textarea>
+          <div class="mt-test-config-row">
+            <label class="mt-test-config-field">
+              Системный промпт:
+              <input class="mt-test-system-input" type="text" value="${escapeHtml(t.systemPrompt || '')}" placeholder="(необязательно)" ${readonly} />
+            </label>
+            <label class="mt-test-config-field">
+              Вес (баллы):
+              <input class="mt-test-weight-input" type="number" value="${t.weight}" min="1" max="100" ${readonly} />
+            </label>
+            <label class="mt-test-config-field">
+              Max tokens:
+              <input class="mt-test-tokens-input" type="number" value="${t.maxTokens}" min="10" max="32768" ${readonly} />
+            </label>
+            <label class="mt-test-config-field mt-test-config-checkbox">
+              JSON:
+              <input class="mt-test-json-input" type="checkbox" ${t.jsonMode ? 'checked' : ''} ${readonly} />
+            </label>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  private readCustomTestsFromUI(): TestDefinition[] {
+    const items = this.container.querySelectorAll('.mt-test-config-item:not(.mt-test-config-builtin)');
+    const tests: TestDefinition[] = [];
+
+    items.forEach((item) => {
+      const name = (item.querySelector('.mt-test-name-input') as HTMLInputElement)?.value.trim() || 'Без названия';
+      const prompt = (item.querySelector('.mt-test-prompt-input') as HTMLTextAreaElement)?.value.trim() || '';
+      const systemPrompt = (item.querySelector('.mt-test-system-input') as HTMLInputElement)?.value.trim() || undefined;
+      const weight = parseInt((item.querySelector('.mt-test-weight-input') as HTMLInputElement)?.value || '10', 10);
+      const maxTokens = parseInt((item.querySelector('.mt-test-tokens-input') as HTMLInputElement)?.value || '200', 10);
+      const jsonMode = (item.querySelector('.mt-test-json-input') as HTMLInputElement)?.checked || false;
+      const id = (item as HTMLElement).dataset.testId || `custom_${Date.now()}_${tests.length}`;
+
+      // Re-use built-in validate functions for built-in test IDs
+      const builtIn = getDefaultTests().find(t => t.id === id);
+
+      tests.push({
+        id,
+        name,
+        prompt,
+        systemPrompt,
+        maxTokens: isNaN(maxTokens) ? 200 : maxTokens,
+        jsonMode,
+        weight: isNaN(weight) ? 10 : weight,
+        validate: builtIn ? builtIn.validate : (_r) => false, // Custom tests: manual validation (user inspects response)
+        isBuiltIn: false,
+      });
+    });
+
+    return tests;
   }
 
   // ============================================================
@@ -548,6 +773,87 @@ export class ModelTestView {
       // Re-render stars
       modelCell.innerHTML = starsHtml(rating);
     });
+
+    // Result row click → toggle detail panel
+    this.container.querySelector('#mt-results-body')?.addEventListener('click', (e) => {
+      // Don't toggle if clicking on a star
+      if ((e.target as HTMLElement).closest('.mt-star')) return;
+      const row = (e.target as HTMLElement).closest('.mt-result-row') as HTMLElement | null;
+      if (!row) return;
+      const modelId = row.dataset.resultModelId;
+      if (!modelId) return;
+      const detailRow = this.container.querySelector(`tr[data-detail-model-id="${CSS.escape(modelId)}"]`) as HTMLElement | null;
+      if (!detailRow) return;
+
+      const isHidden = detailRow.style.display === 'none';
+      detailRow.style.display = isHidden ? '' : 'none';
+    });
+
+    // Toggle full text in detail panel
+    this.container.querySelector('#mt-results-body')?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.mt-btn-toggle-full') as HTMLElement | null;
+      if (!btn) return;
+      const pre = btn.previousElementSibling as HTMLPreElement | null;
+      if (!pre) return;
+      const fullText = pre.dataset.fullText || '';
+      const truncated = pre.dataset.truncated || '';
+      if (btn.textContent === 'Показать полностью') {
+        pre.textContent = fullText;
+        btn.textContent = 'Свернуть';
+      } else {
+        pre.textContent = truncated;
+        btn.textContent = 'Показать полностью';
+      }
+    });
+
+    // --- Test config events ---
+    // Add test
+    this.container.querySelector('#mt-add-test')?.addEventListener('click', () => {
+      const newId = `custom_${Date.now()}`;
+      const newTest: TestDefinition = {
+        id: newId,
+        name: '',
+        prompt: '',
+        maxTokens: 200,
+        jsonMode: false,
+        weight: 10,
+        validate: (_r) => false,
+        isBuiltIn: false,
+      };
+      this.customTests.push(newTest);
+      this.rerenderTestConfig();
+    });
+
+    // Delete test
+    this.container.querySelector('#mt-test-config-list')?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.mt-btn-delete') as HTMLElement | null;
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.testIdx || '-1', 10);
+      if (idx < 0) return;
+      const allTests = getActiveTests();
+      if (idx >= allTests.length) return;
+      const testId = allTests[idx].id;
+      this.customTests = this.customTests.filter(t => t.id !== testId);
+      this.rerenderTestConfig();
+    });
+
+    // Save tests
+    this.container.querySelector('#mt-save-tests')?.addEventListener('click', () => {
+      this.customTests = this.readCustomTestsFromUI();
+      saveCustomTests(this.customTests);
+      // Show test section and config section, update results header
+      this.showTestSections();
+      this.showErrorCustom('✅ Пользовательские тесты сохранены');
+    });
+  }
+
+  private rerenderTestConfig(): void {
+    const allTests = getActiveTests();
+    const listEl = this.container.querySelector('#mt-test-config-list');
+    if (listEl) listEl.innerHTML = this.renderTestConfigList(allTests);
+    // Update summary count
+    const summary = this.container.querySelector('.mt-config-summary');
+    if (summary) summary.textContent = `⚙️ Настроить тесты (${allTests.length})`;
   }
 
   // ============================================================
@@ -578,14 +884,7 @@ export class ModelTestView {
       }
 
       this.applyFilters();
-
-      // Show model list section
-      const section = this.container.querySelector('#mt-model-list-section') as HTMLElement | null;
-      if (section) section.style.display = '';
-
-      // Show test section
-      const testSection = this.container.querySelector('#mt-test-section') as HTMLElement | null;
-      if (testSection) testSection.style.display = '';
+      this.showTestSections();
 
       countEl.textContent = `Найдено: ${this.allModels.length} моделей`;
     } catch (err) {
@@ -593,6 +892,32 @@ export class ModelTestView {
     } finally {
       btn.textContent = '📥 Загрузить модели';
       btn.removeAttribute('disabled');
+    }
+  }
+
+  private showTestSections(): void {
+    const section = this.container.querySelector('#mt-model-list-section') as HTMLElement | null;
+    if (section) section.style.display = '';
+
+    const testSection = this.container.querySelector('#mt-test-section') as HTMLElement | null;
+    if (testSection) testSection.style.display = '';
+
+    const configSection = this.container.querySelector('#mt-test-config-section') as HTMLElement | null;
+    if (configSection) configSection.style.display = '';
+
+    // Re-render results table header to reflect current tests
+    const resultsSection = this.container.querySelector('#mt-results-section') as HTMLElement | null;
+    if (resultsSection) {
+      const activeTests = getActiveTests();
+      const thead = resultsSection.querySelector('thead tr');
+      if (thead) {
+        thead.innerHTML = `
+          <th>Модель</th>
+          ${activeTests.map(t => `<th>${escapeHtml(t.name)}</th>`).join('')}
+          <th>Оценка</th>
+          <th>Балл</th>
+        `;
+      }
     }
   }
 
@@ -690,7 +1015,7 @@ export class ModelTestView {
   }
 
   // ============================================================
-  // Test execution
+  // Test execution — dynamic test runner
   // ============================================================
 
   private async runTests(): Promise<void> {
@@ -713,13 +1038,18 @@ export class ModelTestView {
     progressSection.style.display = '';
     resultsSection.style.display = '';
 
-    // Create provider — for testing we try both providers as needed
-    // Use the currently active provider settings
+    const activeTests = getActiveTests();
+    // Filter tests: skip extraction if disabled
+    const testsToRun = activeTests.filter(t => {
+      if (t.id === 'extraction' && !this.runExtractionTest) return false;
+      return true;
+    });
+
     const providerMap = new Map<string, AIProvider>();
 
     const modelsToTest = this.filteredModels.filter((m) => this.selectedModelIds.has(m.id));
     const totalModels = modelsToTest.length;
-    const totalSteps = totalModels * (this.runExtractionTest ? 4 : 3);
+    const totalSteps = totalModels * testsToRun.length;
     let currentStep = 0;
 
     for (const model of modelsToTest) {
@@ -735,137 +1065,88 @@ export class ModelTestView {
           provider = createProvider(model.provider, apiKey, { zaiBaseUrl: s.zaiBaseUrl });
           providerMap.set(model.provider, provider);
         } catch (err) {
-          this.testResults.set(model.id, {
+          const errorResult: TestResult = {
             modelId: model.id,
             provider: model.provider,
-            simplePass: false, simpleTimeMs: 0, simpleError: `Provider error: ${err}`,
-            instructionPass: false, instructionTimeMs: 0, instructionError: 'Skipped',
-            jsonPass: false, jsonTimeMs: 0, jsonError: 'Skipped',
-            extractionPass: false, extractionTimeMs: 0, extractionError: 'Skipped',
             totalScore: 0,
-          });
-          currentStep += this.runExtractionTest ? 4 : 3;
+            testResults: testsToRun.map(t => ({
+              testId: t.id,
+              testName: t.name,
+              pass: false,
+              timeMs: 0,
+              error: `Ошибка провайдера: ${err}`,
+              prompt: t.prompt,
+            })),
+          };
+          this.testResults.set(model.id, errorResult);
+          currentStep += testsToRun.length;
           this.updateProgress(model.id, `Ошибка провайдера`, currentStep, totalSteps);
           continue;
         }
       }
 
+      const testResults: TestDetailItem[] = [];
+
+      for (const testDef of testsToRun) {
+        if (this.isCancelled) break;
+
+        this.updateProgress(model.id, testDef.name + '...', currentStep, totalSteps);
+
+        // Build messages
+        const messages: ChatMessage[] = [];
+        if (testDef.systemPrompt) {
+          messages.push({ role: 'system', content: testDef.systemPrompt });
+        }
+        messages.push({ role: 'user', content: testDef.prompt });
+
+        const detail: TestDetailItem = {
+          testId: testDef.id,
+          testName: testDef.name,
+          pass: false,
+          timeMs: 0,
+          prompt: testDef.prompt,
+        };
+
+        try {
+          const start = Date.now();
+          const resp = await provider.chat(messages, {
+            model: model.id,
+            temperature: testDef.jsonMode ? 0 : 0,
+            maxTokens: testDef.maxTokens,
+            jsonMode: testDef.jsonMode,
+          });
+          detail.timeMs = Date.now() - start;
+          detail.response = resp.content;
+          detail.pass = testDef.validate(resp.content);
+        } catch (err) {
+          detail.timeMs = 0;
+          detail.error = err instanceof Error ? err.message : String(err);
+        }
+
+        testResults.push(detail);
+        currentStep++;
+
+        // Rate limit delay
+        if (s.requestDelayMs && !this.isCancelled && testDef !== testsToRun[testsToRun.length - 1]) {
+          await sleep(s.requestDelayMs);
+        }
+      }
+
+      // Compute score from pass results
+      const totalScore = computeScore(testResults.map(tr => ({ testId: tr.testId, pass: tr.pass })));
       const result: TestResult = {
         modelId: model.id,
         provider: model.provider,
-        simplePass: false, simpleTimeMs: 0,
-        instructionPass: false, instructionTimeMs: 0,
-        jsonPass: false, jsonTimeMs: 0,
-        extractionPass: false, extractionTimeMs: 0,
-        totalScore: 0,
+        totalScore,
+        testResults,
       };
-
-      // --- Test 1: Simple response ---
-      if (!this.isCancelled) {
-        this.updateProgress(model.id, 'Простой тест...', currentStep, totalSteps);
-        try {
-          const start = Date.now();
-          const resp = await provider.chat(
-            [{ role: 'user', content: SIMPLE_TEST_PROMPT }],
-            { model: model.id, temperature: 0, maxTokens: 50 },
-          );
-          result.simpleTimeMs = Date.now() - start;
-          const answer = resp.content.toLowerCase().trim();
-          result.simplePass = answer.includes('да') || answer.includes('yes');
-        } catch (err) {
-          result.simpleTimeMs = 0;
-          result.simpleError = err instanceof Error ? err.message : String(err);
-        }
-        currentStep++;
-      }
-
-      // Rate limit delay
-      if (s.requestDelayMs && !this.isCancelled) await sleep(s.requestDelayMs);
-
-      // --- Test 2: Instruction following ---
-      if (!this.isCancelled) {
-        this.updateProgress(model.id, 'Тест инструкций...', currentStep, totalSteps);
-        try {
-          const start = Date.now();
-          const resp = await provider.chat(
-            [{ role: 'user', content: INSTRUCTION_TEST_PROMPT }],
-            { model: model.id, temperature: 0, maxTokens: 200 },
-          );
-          result.instructionTimeMs = Date.now() - start;
-          const lines = resp.content.trim().split('\n');
-          result.instructionPass =
-            lines.length >= 3 &&
-            lines[0].includes('42') &&
-            lines[1].includes('тест') &&
-            lines[2].trim() === '';
-        } catch (err) {
-          result.instructionTimeMs = 0;
-          result.instructionError = err instanceof Error ? err.message : String(err);
-        }
-        currentStep++;
-      }
-
-      if (s.requestDelayMs && !this.isCancelled) await sleep(s.requestDelayMs);
-
-      // --- Test 3: JSON mode ---
-      if (!this.isCancelled) {
-        this.updateProgress(model.id, 'JSON тест...', currentStep, totalSteps);
-        try {
-          const start = Date.now();
-          const resp = await provider.chat(
-            [{ role: 'user', content: JSON_TEST_PROMPT }],
-            { model: model.id, temperature: 0, maxTokens: 100, jsonMode: true },
-          );
-          result.jsonTimeMs = Date.now() - start;
-          const parsed = JSON.parse(resp.content);
-          result.jsonPass = parsed.color === 'blue' && parsed.count === 5;
-        } catch (err) {
-          result.jsonTimeMs = 0;
-          result.jsonError = err instanceof Error ? err.message : String(err);
-        }
-        currentStep++;
-      }
-
-      // --- Test 4: Idea extraction (optional) ---
-      if (this.runExtractionTest && !this.isCancelled) {
-        if (s.requestDelayMs) await sleep(s.requestDelayMs);
-        this.updateProgress(model.id, 'Тест извлечения идей...', currentStep, totalSteps);
-        try {
-          const start = Date.now();
-          const messages: ChatMessage[] = [
-            { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
-            { role: 'user', content: EXTRACTION_USER_PROMPT },
-          ];
-          const resp = await provider.chat(
-            messages,
-            { model: model.id, temperature: 0.3, maxTokens: 4096, jsonMode: true },
-          );
-          result.extractionTimeMs = Date.now() - start;
-
-          const json = JSON.parse(resp.content);
-          const ideas = json.ideas || json;
-          if (Array.isArray(ideas) && ideas.length > 0) {
-            const first = ideas[0];
-            result.extractionPass =
-              typeof first.title === 'string' && first.title.length > 0 &&
-              typeof first.summary === 'string' && first.summary.length > 0;
-          }
-        } catch (err) {
-          result.extractionTimeMs = 0;
-          result.extractionError = err instanceof Error ? err.message : String(err);
-        }
-        currentStep++;
-      }
-
-      // Compute score
-      result.totalScore = computeScore(result);
       this.testResults.set(model.id, result);
 
       // Save to DB
       await this.saveRating(result, undefined);
 
       // Update results table
-      this.refreshResults();
+      this.refreshResults(activeTests);
     }
 
     // Done
@@ -911,29 +1192,40 @@ export class ModelTestView {
     }
   }
 
-  private refreshResults(): void {
+  private refreshResults(activeTests?: TestDefinition[]): void {
     const tbody = this.container.querySelector('#mt-results-body');
-    if (tbody) tbody.innerHTML = this.renderResultRows();
+    if (tbody) tbody.innerHTML = this.renderResultRows(activeTests || getActiveTests());
   }
 
   // ============================================================
-  // Rating persistence
+  // Rating persistence — new dynamic format
   // ============================================================
 
   private async saveRating(result: TestResult, userRating: number | undefined): Promise<void> {
+    // Build legacy fields from dynamic results for backward compatibility
+    const findTest = (id: string) => result.testResults.find(t => t.testId === id);
+
+    const simpleTest = findTest('simple');
+    const instructionTest = findTest('instruction');
+    const jsonTest = findTest('json');
+    const extractionTest = findTest('extraction');
+
     const rating: ModelRating = {
       modelId: result.modelId,
       provider: result.provider,
       testedAt: Date.now(),
-      simplePass: result.simplePass,
-      simpleTimeMs: result.simpleTimeMs,
-      instructionPass: result.instructionPass,
-      instructionTimeMs: result.instructionTimeMs,
-      jsonPass: result.jsonPass,
-      jsonTimeMs: result.jsonTimeMs,
-      extractionPass: result.extractionPass,
-      extractionTimeMs: result.extractionTimeMs,
+      // Legacy fields
+      simplePass: simpleTest?.pass ?? false,
+      simpleTimeMs: simpleTest?.timeMs ?? 0,
+      instructionPass: instructionTest?.pass ?? false,
+      instructionTimeMs: instructionTest?.timeMs ?? 0,
+      jsonPass: jsonTest?.pass ?? false,
+      jsonTimeMs: jsonTest?.timeMs ?? 0,
+      extractionPass: extractionTest?.pass ?? false,
+      extractionTimeMs: extractionTest?.timeMs ?? 0,
       totalScore: result.totalScore,
+      // New dynamic format
+      testDetailsJson: JSON.stringify(result.testResults),
     };
     if (userRating !== undefined) {
       rating.userRating = userRating;
@@ -942,7 +1234,7 @@ export class ModelTestView {
   }
 
   // ============================================================
-  // History
+  // History — show per-test results
   // ============================================================
 
   private async loadHistory(): Promise<void> {
@@ -951,7 +1243,7 @@ export class ModelTestView {
     if (!section || !listEl) return;
 
     try {
-      const ratings = await getBestModels(30);
+      const ratings = await getAllModelRatings();
       if (ratings.length === 0) {
         section.style.display = 'none';
         return;
@@ -963,13 +1255,44 @@ export class ModelTestView {
         const date = new Date(r.testedAt).toLocaleString('ru-RU', {
           day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
         });
+
+        // Parse test details if available
+        let testBadges = '';
+        if (r.testDetailsJson) {
+          try {
+            const details: TestDetailItem[] = JSON.parse(r.testDetailsJson);
+            testBadges = details.map(d =>
+              `<span class="mt-history-badge ${d.pass ? 'mt-result-pass' : 'mt-result-fail'}" title="${escapeHtml(d.testName)}">${d.pass ? '✅' : '❌'} ${escapeHtml(d.testName)}</span>`
+            ).join('');
+          } catch {
+            // Fallback to legacy display
+            testBadges = `
+              <span class="mt-history-badge ${r.simplePass ? 'mt-result-pass' : 'mt-result-fail'}">Простой</span>
+              <span class="mt-history-badge ${r.instructionPass ? 'mt-result-pass' : 'mt-result-fail'}">Инструкции</span>
+              <span class="mt-history-badge ${r.jsonPass ? 'mt-result-pass' : 'mt-result-fail'}">JSON</span>
+              ${r.extractionPass !== undefined ? `<span class="mt-history-badge ${r.extractionPass ? 'mt-result-pass' : 'mt-result-fail'}">Извлечение</span>` : ''}
+            `;
+          }
+        } else {
+          // Legacy display
+          testBadges = `
+            <span class="mt-history-badge ${r.simplePass ? 'mt-result-pass' : 'mt-result-fail'}">Простой</span>
+            <span class="mt-history-badge ${r.instructionPass ? 'mt-result-pass' : 'mt-result-fail'}">Инструкции</span>
+            <span class="mt-history-badge ${r.jsonPass ? 'mt-result-pass' : 'mt-result-fail'}">JSON</span>
+            ${r.extractionPass !== undefined ? `<span class="mt-history-badge ${r.extractionPass ? 'mt-result-pass' : 'mt-result-fail'}">Извлечение</span>` : ''}
+          `;
+        }
+
         return `
           <div class="mt-history-item">
-            <span class="mt-history-model">${escapeHtml(r.modelId)}</span>
-            <span class="mt-result-provider">${escapeHtml(r.provider)}</span>
-            <span class="mt-history-date">${date}</span>
-            ${r.userRating ? `<span>${'★'.repeat(r.userRating)}${'☆'.repeat(5 - r.userRating)}</span>` : ''}
-            <span class="mt-history-score mt-result-score ${scoreClass}">${r.totalScore}</span>
+            <div class="mt-history-main">
+              <span class="mt-history-model">${escapeHtml(r.modelId)}</span>
+              <span class="mt-result-provider">${escapeHtml(r.provider)}</span>
+              <span class="mt-history-date">${date}</span>
+              ${r.userRating ? `<span class="mt-history-stars">${'★'.repeat(r.userRating)}${'☆'.repeat(5 - r.userRating)}</span>` : ''}
+              <span class="mt-history-score mt-result-score ${scoreClass}">${r.totalScore}</span>
+            </div>
+            <div class="mt-history-tests">${testBadges}</div>
           </div>
         `;
       }).join('');
@@ -979,12 +1302,26 @@ export class ModelTestView {
   }
 
   // ============================================================
-  // Export
+  // Export — include prompts and responses
   // ============================================================
 
   private exportResults(): void {
     const results = Array.from(this.testResults.values()).sort((a, b) => b.totalScore - a.totalScore);
-    const json = JSON.stringify(results, null, 2);
+    const exportData = results.map(r => ({
+      modelId: r.modelId,
+      provider: r.provider,
+      totalScore: r.totalScore,
+      tests: r.testResults.map(tr => ({
+        testId: tr.testId,
+        testName: tr.testName,
+        pass: tr.pass,
+        timeMs: tr.timeMs,
+        error: tr.error || undefined,
+        prompt: tr.prompt,
+        response: tr.response || undefined,
+      })),
+    }));
+    const json = JSON.stringify(exportData, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1002,6 +1339,13 @@ export class ModelTestView {
     const container = this.container.querySelector('#mt-error-container');
     if (container) {
       container.innerHTML = `<div class="mt-error">⚠️ ${escapeHtml(message)}</div>`;
+    }
+  }
+
+  private showErrorCustom(message: string): void {
+    const container = this.container.querySelector('#mt-error-container');
+    if (container) {
+      container.innerHTML = `<div class="mt-error mt-error-success">✅ ${escapeHtml(message)}</div>`;
     }
   }
 }
