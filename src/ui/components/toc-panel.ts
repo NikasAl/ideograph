@@ -7,6 +7,7 @@ import type { TOCEntry, Book } from '../../db/schema.js';
 import { getSettings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
 import { extractTOC, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
+import { ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 import '../../ui/styles/components/toc-panel.css';
 
 export class TOCPanel {
@@ -266,11 +267,26 @@ export class TOCPanel {
       }
       const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
 
+      // Read PDF file data (same pattern as analysis-panel)
+      const access = await ensureFileAccess(this.bookId);
+      if (access === null) {
+        const handle = await reconnectFileHandleWithCheck(this.bookId, book.filePath);
+        if (!handle) {
+          this.showError('Не выбран файл. Нажмите «🔗 Подключить файл» в списке книг.');
+          return;
+        }
+      } else if (access === 'denied') {
+        this.showError('Доступ к файлу запрещён. Подключите файл заново.');
+        return;
+      }
+
+      const pdfData = await readFileAsArrayBuffer(this.bookId);
+
       const entries = await extractTOC({
         bookId: this.bookId,
         tocPages: [from, to],
         mode: book.extractionMode,
-        pdfData: new ArrayBuffer(0), // will be replaced by actual data in the caller
+        pdfData,
         provider,
         model: settings.activeModel,
         ocrModel: settings.ocrModel,
@@ -287,16 +303,6 @@ export class TOCPanel {
     } finally {
       this.isExtracting = false;
     }
-  }
-
-  /**
-   * Update pdfData for TOC extraction.
-   * Called from outside when the actual file data is available.
-   */
-  setPdfData(pdfData: ArrayBuffer): void {
-    // Monkey-patch extractTOC to use real data
-    // This is a workaround since the panel is created before file data is loaded
-    (this as Record<string, unknown>)._pdfData = pdfData;
   }
 
   private async handleSummarizeAll(book: Book): Promise<void> {
