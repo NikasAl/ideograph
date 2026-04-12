@@ -53,13 +53,13 @@ class App {
         </div>
         <nav class="app-nav">
           <button class="nav-btn ${this.currentView === 'library' ? 'active' : ''}" data-view="library">
-            📚 Библиотека
+            ≡ Библиотека
           </button>
           <button class="nav-btn ${this.currentView === 'ideas' ? 'active' : ''}" data-view="ideas" ${!this.selectedBookId ? 'disabled' : ''}>
             ✦ Идеи
           </button>
           <button class="nav-btn ${this.currentView === 'graph' ? 'active' : ''}" data-view="graph" ${!this.selectedBookId ? 'disabled' : ''}>
-            🕸️ Граф
+            ~ Граф
           </button>
           <button class="nav-btn ${this.currentView === 'toc' ? 'active' : ''}" data-view="toc" ${!this.selectedBookId ? 'disabled' : ''}>
             ≡ Оглавление
@@ -67,8 +67,8 @@ class App {
         </nav>
         <div class="app-actions">
           <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">⚡</button>
-          <button class="icon-btn btn-about" id="btn-about" title="О расширении">ℹ️</button>
-          <button class="icon-btn" id="btn-settings" title="Настройки">⚙️</button>
+          <button class="icon-btn btn-about" id="btn-about" title="О расширении">i</button>
+          <button class="icon-btn" id="btn-settings" title="Настройки"></button>
         </div>
       </header>
 

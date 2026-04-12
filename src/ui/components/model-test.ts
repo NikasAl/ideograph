@@ -323,13 +323,13 @@ export class ModelTestView {
         <!-- Model list (shown after fetch) -->
         <div class="mt-section" id="mt-model-list-section" style="display:none;">
           <div class="mt-section-header">
-            <h3>📋 Модели (${this.filteredModels.length})</h3>
+            <h3>Модели (${this.filteredModels.length})</h3>
           </div>
 
           <!-- Filters -->
           <div class="mt-filters">
             <label>
-              🔍 <input type="text" id="mt-search" placeholder="Поиск по названию..." value="${escapeHtml(this.searchQuery)}" />
+              <input type="text" id="mt-search" placeholder="Поиск по названию..." value="${escapeHtml(this.searchQuery)}" />
             </label>
             <label>
               💰 Макс. цена: <input type="number" id="mt-max-price" placeholder="∞" value="${this.maxPrice}" min="0" step="0.01" style="width:80px;" />
@@ -382,7 +382,7 @@ export class ModelTestView {
             <button class="primary-btn" id="mt-run-tests" ${this.selectedModelIds.size === 0 ? 'disabled' : ''}>
               ▶ Запустить тесты (${this.selectedModelIds.size} модел${this.selectedModelIds.size === 1 ? 'ь' : this.selectedModelIds.size < 5 ? 'и' : 'ей'})
             </button>
-            <button class="mt-btn-cancel" id="mt-cancel-tests" style="display:none;">⏹ Отменить</button>
+            <button class="mt-btn-cancel" id="mt-cancel-tests" style="display:none;">Отменить</button>
             <span class="selected-count" id="mt-test-status"></span>
           </div>
 
@@ -401,14 +401,14 @@ export class ModelTestView {
         <!-- Configure Tests (collapsible) -->
         <div class="mt-section" id="mt-test-config-section" style="display:none;">
           <details class="mt-config-details">
-            <summary class="mt-config-summary">⚙️ Настроить тесты (${activeTests.length})</summary>
+            <summary class="mt-config-summary">Настроить тесты (${activeTests.length})</summary>
             <div class="mt-config-body">
               <div id="mt-test-config-list">
                 ${this.renderTestConfigList(activeTests)}
               </div>
               <div class="mt-config-actions">
                 <button class="mt-btn-add" id="mt-add-test">➕ Добавить тест</button>
-                <button class="primary-btn" id="mt-save-tests" style="margin-left:auto;">💾 Сохранить</button>
+                <button class="primary-btn" id="mt-save-tests" style="margin-left:auto;">Сохранить</button>
               </div>
             </div>
           </details>
@@ -445,9 +445,9 @@ export class ModelTestView {
         <!-- History -->
         <div class="mt-section mt-history" id="mt-history-section" style="display:none;">
           <div class="mt-section-header">
-            <h3>📜 История тестов</h3>
+            <h3>≡ История тестов</h3>
             <div class="mt-actions-row">
-              <button class="mt-btn-danger" id="mt-clear-history">🗑 Очистить историю</button>
+              <button class="mt-btn-danger" id="mt-clear-history">x Очистить историю</button>
             </div>
           </div>
           <div id="mt-history-list">
@@ -502,7 +502,7 @@ export class ModelTestView {
         return `
           <td>
             <div class="mt-result-cell">
-              <span class="${detail.pass ? 'mt-result-pass' : 'mt-result-fail'}">${detail.pass ? '✅' : '❌'}</span>
+              <span class="${detail.pass ? 'mt-result-pass' : 'mt-result-fail'}">${detail.pass ? '[+]' : '[-]'}</span>
               <span class="mt-result-time">${detail.timeMs}ms</span>
             </div>
           </td>
@@ -545,14 +545,14 @@ export class ModelTestView {
         : '';
 
       const errorHtml = tr.error
-        ? `<div class="mt-detail-error">⚠️ Ошибка: ${escapeHtml(tr.error)}</div>`
+        ? `<div class="mt-detail-error">! Ошибка: ${escapeHtml(tr.error)}</div>`
         : '';
 
       return `
         <div class="mt-detail-test-item">
           <div class="mt-detail-header">
             <span class="mt-detail-name">${escapeHtml(tr.testName)}</span>
-            <span class="${tr.pass ? 'mt-result-pass' : 'mt-result-fail'}">${tr.pass ? '✅ Пройден' : '❌ Не пройден'}</span>
+            <span class="${tr.pass ? 'mt-result-pass' : 'mt-result-fail'}">${tr.pass ? '[+] Пройден' : '[-] Не пройден'}</span>
             <span class="mt-result-time">${tr.timeMs}мс</span>
           </div>
           <div class="mt-detail-prompt">
@@ -575,7 +575,7 @@ export class ModelTestView {
     return allTests.map((t, idx) => {
       const isBuiltin = t.isBuiltIn || builtInTests.some(b => b.id === t.id);
       const badge = isBuiltin ? '<span class="mt-test-badge mt-test-badge-builtin">встроенный</span>' : '';
-      const deleteBtn = isBuiltin ? '' : `<button class="mt-btn-delete" data-test-idx="${idx}">🗑</button>`;
+      const deleteBtn = isBuiltin ? '' : `<button class="mt-btn-delete" data-test-idx="${idx}">x</button>`;
       const readonly = isBuiltin ? 'readonly' : '';
 
       return `
@@ -843,7 +843,7 @@ export class ModelTestView {
       saveCustomTests(this.customTests);
       // Show test section and config section, update results header
       this.showTestSections();
-      this.showErrorCustom('✅ Пользовательские тесты сохранены');
+      this.showErrorCustom('[ok] Пользовательские тесты сохранены');
     });
   }
 
@@ -853,7 +853,7 @@ export class ModelTestView {
     if (listEl) listEl.innerHTML = this.renderTestConfigList(allTests);
     // Update summary count
     const summary = this.container.querySelector('.mt-config-summary');
-    if (summary) summary.textContent = `⚙️ Настроить тесты (${allTests.length})`;
+    if (summary) summary.textContent = `Настроить тесты (${allTests.length})`;
   }
 
   // ============================================================
@@ -865,7 +865,7 @@ export class ModelTestView {
     const btn = this.container.querySelector('#mt-fetch-models') as HTMLElement;
     const countEl = this.container.querySelector('#mt-models-count') as HTMLElement;
 
-    btn.textContent = '⏳ Загрузка...';
+    btn.textContent = '... Загрузка';
     btn.setAttribute('disabled', 'true');
 
     try {
@@ -1155,9 +1155,9 @@ export class ModelTestView {
     cancelBtn.style.display = 'none';
 
     if (this.isCancelled) {
-      statusEl.textContent = '❌ Тесты отменены';
+      statusEl.textContent = '[-] Тесты отменены';
     } else {
-      statusEl.textContent = `✅ Тесты завершены (${this.testResults.size} моделей)`;
+      statusEl.textContent = `[ok] Тесты завершены (${this.testResults.size} моделей)`;
     }
 
     this.progressPercent = 100;
@@ -1262,7 +1262,7 @@ export class ModelTestView {
           try {
             const details: TestDetailItem[] = JSON.parse(r.testDetailsJson);
             testBadges = details.map(d =>
-              `<span class="mt-history-badge ${d.pass ? 'mt-result-pass' : 'mt-result-fail'}" title="${escapeHtml(d.testName)}">${d.pass ? '✅' : '❌'} ${escapeHtml(d.testName)}</span>`
+              `<span class="mt-history-badge ${d.pass ? 'mt-result-pass' : 'mt-result-fail'}" title="${escapeHtml(d.testName)}">${d.pass ? '[+]' : '[-]'} ${escapeHtml(d.testName)}</span>`
             ).join('');
           } catch {
             // Fallback to legacy display
@@ -1338,14 +1338,14 @@ export class ModelTestView {
   private showError(message: string): void {
     const container = this.container.querySelector('#mt-error-container');
     if (container) {
-      container.innerHTML = `<div class="mt-error">⚠️ ${escapeHtml(message)}</div>`;
+      container.innerHTML = `<div class="mt-error">! ${escapeHtml(message)}</div>`;
     }
   }
 
   private showErrorCustom(message: string): void {
     const container = this.container.querySelector('#mt-error-container');
     if (container) {
-      container.innerHTML = `<div class="mt-error mt-error-success">✅ ${escapeHtml(message)}</div>`;
+      container.innerHTML = `<div class="mt-error mt-error-success">[ok] ${escapeHtml(message)}</div>`;
     }
   }
 }

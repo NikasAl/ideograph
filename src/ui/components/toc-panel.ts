@@ -55,8 +55,8 @@ export class TOCPanel {
         </div>
         <div class="toc-header-actions">
           ${this.toc.length > 0 ? `
-            <button class="secondary-btn" id="toc-summarize-all">📋 Суммаризировать</button>
-            <button class="secondary-btn" id="toc-clear">🗑️ Очистить</button>
+            <button class="secondary-btn" id="toc-summarize-all">≡ Суммаризировать</button>
+            <button class="secondary-btn" id="toc-clear">x Очистить</button>
           ` : ''}
         </div>
       </div>
@@ -76,7 +76,7 @@ export class TOCPanel {
           <span class="toc-page-separator">—</span>
           <input type="number" class="toc-page-input" id="toc-to" value="${!hasTOC ? 5 : ''}" min="1" max="${book.totalPages}" placeholder="до">
           <button class="primary-btn" id="toc-extract-btn" ${this.isExtracting ? 'disabled' : ''}>
-            ${this.isExtracting ? '⏳ Распознаём...' : '🔍 Распознать'}
+            ${this.isExtracting ? '... Распознаём...' : 'Распознать'}
           </button>
         </div>
         ${hasTOC ? `
@@ -84,7 +84,7 @@ export class TOCPanel {
           <label class="toc-offset-label">Сдвиг страниц (книга→PDF):</label>
           <input type="number" class="toc-page-input toc-offset-input" id="toc-offset" value="${offset}" title="Если страница в книге N открывается в PDF на странице M, сдвиг = M - N">
           <button class="secondary-btn" id="toc-apply-offset">Применить</button>
-          <button class="secondary-btn" id="toc-calibrate-offset" title="По одной известной странице вычислить сдвиг">📐 Калибровать</button>
+          <button class="secondary-btn" id="toc-calibrate-offset" title="По одной известной странице вычислить сдвиг">/ Калибровать</button>
         </div>
         ` : ''}
         <div class="toc-progress" id="toc-progress">
@@ -150,7 +150,7 @@ export class TOCPanel {
               </select>
             </div>
             <div class="toc-edit-actions">
-              <button class="toc-edit-save" data-save-id="${entry.id}">💾 Сохранить</button>
+              <button class="toc-edit-save" data-save-id="${entry.id}">Сохранить</button>
               <button class="toc-edit-cancel" data-cancel-id="${entry.id}">Отмена</button>
             </div>
           </div>
@@ -316,7 +316,7 @@ export class TOCPanel {
     const extractBtn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
     if (extractBtn) {
       extractBtn.disabled = true;
-      extractBtn.textContent = '⏳ Распознаём...';
+      extractBtn.textContent = '... Распознаём';
     }
     this.updateProgress('Подготовка...', 5);
 
@@ -333,7 +333,7 @@ export class TOCPanel {
       if (access === null) {
         const handle = await reconnectFileHandleWithCheck(this.bookId, book.filePath);
         if (!handle) {
-          this.showError('Не выбран файл. Нажмите «🔗 Подключить файл» в списке книг.');
+          this.showError('Не выбран файл. Нажмите «⟷ Подключить файл» в списке книг.');
           return;
         }
       } else if (access === 'denied') {
@@ -367,7 +367,7 @@ export class TOCPanel {
       const btn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '🔍 Распознать';
+        btn.textContent = 'Распознать';
       }
     }
   }
@@ -430,10 +430,10 @@ export class TOCPanel {
     const entry = this.toc.find(e => e.id === entryId);
     if (!entry) return;
 
-    // Compute page range — if no pageEnd, use a reasonable estimate
-    const pageFrom = entry.page;
-    let pageTo = entry.pageEnd;
-    if (!pageTo) {
+    // Compute page range in BOOK numbering — if no pageEnd, estimate
+    const pageFromBook = entry.page;
+    let pageToBook = entry.pageEnd;
+    if (!pageToBook) {
       // Try to find the next entry at the same or higher level
       const sorted = [...this.toc].sort((a, b) => {
         if (a.page !== b.page) return a.page - b.page;
@@ -443,16 +443,21 @@ export class TOCPanel {
       if (idx >= 0) {
         for (let j = idx + 1; j < sorted.length; j++) {
           if (sorted[j].level <= entry.level) {
-            pageTo = sorted[j].page - 1;
+            pageToBook = sorted[j].page - 1;
             break;
           }
         }
       }
       // Fallback: estimate ~10 pages
-      if (!pageTo) {
-        pageTo = Math.min(entry.page + 9, this.book!.totalPages);
+      if (!pageToBook) {
+        pageToBook = Math.min(entry.page + 9, this.book!.totalPages);
       }
     }
+
+    // Convert book pages → document pages using offset
+    const offset = this.book!.pageOffset || 0;
+    const pageFrom = pageFromBook + offset;
+    const pageTo = pageToBook + offset;
 
     document.dispatchEvent(new CustomEvent('analyze-chapter', {
       detail: {
@@ -515,18 +520,18 @@ export class TOCPanel {
 
     const page = parseInt(btn.dataset.page || '1', 10);
     const original = btn.textContent;
-    btn.textContent = '⏳';
+    btn.textContent = '...';
     btn.classList.add('btn-zathura-loading');
 
     try {
       const result = await openInZathura(book.filePath, page);
       if (result.launched) {
-        btn.textContent = '✅';
+        btn.textContent = '[ok]';
       } else {
-        btn.textContent = '📋';
+        btn.textContent = '[копия]';
       }
     } catch {
-      btn.textContent = '❌';
+      btn.textContent = '[!]';
     }
 
     btn.classList.remove('btn-zathura-loading');

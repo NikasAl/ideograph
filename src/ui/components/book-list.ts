@@ -21,7 +21,7 @@ export class BookListView {
     this.container.innerHTML = `
       <div class="book-list-view">
         <div class="view-header">
-          <h2>📚 Библиотека</h2>
+          <h2>≡ Библиотека</h2>
           <div class="view-actions">
             <button class="primary-btn" id="btn-add-book">+ Добавить книгу</button>
           </div>
@@ -60,7 +60,7 @@ export class BookListView {
         <div class="book-card-header">
           <span class="format-badge ${book.format}">${formatBadge}</span>
           <span class="mode-badge">${modeBadge}</span>
-          ${isDisconnected ? '<span class="disconnected-badge" title="Файл не подключён">⚠️ Подключите файл</span>' : ''}
+          ${isDisconnected ? '<span class="disconnected-badge" title="Файл не подключён">! Подключите файл</span>' : ''}
         </div>
         <h3 class="book-title">${this.esc(book.title || 'Без названия')}</h3>
         <p class="book-author">${this.esc(book.author || 'Неизвестный автор')}</p>
@@ -74,9 +74,9 @@ export class BookListView {
         <div class="book-actions">
           <button class="secondary-btn btn-select-book" data-book-id="${book.id}">Открыть идеи</button>
           <button class="secondary-btn btn-open-toc" data-book-id="${book.id}" title="Оглавление">≡ Оглавление</button>
-          ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите PDF/DJVU файл">🔗 Подключить файл</button>` : ''}
+          ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите PDF/DJVU файл">⟷ Подключить файл</button>` : ''}
           <button class="icon-btn btn-open-reader" data-book-id="${book.id}" data-page="1" title="Открыть в ридере">↗</button>
-          <button class="icon-btn btn-remove-book" data-book-id="${book.id}" title="Удалить">🗑️</button>
+          <button class="icon-btn btn-remove-book" data-book-id="${book.id}" title="Удалить">x</button>
         </div>
       </div>
     `;
@@ -98,7 +98,7 @@ export class BookListView {
           const handle = await reconnectFileHandleWithCheck(bookId, book?.filePath);
           if (!handle) return; // User cancelled
         } else if (access === 'denied') {
-          alert('Доступ к файлу запрещён. Переподключите через кнопку «🔗 Подключить файл».');
+          alert('Доступ к файлу запрещён. Переподключите через кнопку «⟷ Подключить файл».');
           return;
         }
 

@@ -2,6 +2,12 @@
    Idea Cards — component styles
    ============================================================ */
 
+/* Relations badge */
+.relations-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* Filters bar */
 .filters-bar {
   display: flex;
@@ -59,6 +65,11 @@
 
 .idea-type-icon {
   font-size: 20px;
+  color: var(--text-muted);
+}
+
+[data-theme="dark"] .idea-type-icon {
+  opacity: 0.7;
 }
 
 .idea-depth-badge {

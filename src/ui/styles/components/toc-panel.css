@@ -162,6 +162,11 @@
 .toc-empty-icon {
   font-size: 3rem;
   margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+[data-theme="dark"] .toc-empty-icon {
+  opacity: 0.3;
 }
 
 .toc-empty-hint {

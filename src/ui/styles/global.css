@@ -102,6 +102,7 @@ body {
 
 .logo-icon {
   font-size: 24px;
+  color: var(--accent);
 }
 
 .logo-text {
@@ -235,11 +236,17 @@ body {
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 18px;
-  transition: background 0.15s ease;
+  color: var(--text-secondary);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .icon-btn:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.icon-btn.active {
+  color: var(--accent);
 }
 
 .toggle-btn {
@@ -322,6 +329,11 @@ body {
 .empty-icon {
   font-size: 48px;
   margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+[data-theme="dark"] .empty-icon {
+  opacity: 0.4;
 }
 
 .empty-hint {

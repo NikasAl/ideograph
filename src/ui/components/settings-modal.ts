@@ -16,12 +16,12 @@ export class SettingsModal {
     this.modal.innerHTML = `
       <div class="modal">
         <div class="modal-header">
-          <h2>⚙️ Настройки</h2>
+          <h2>Настройки</h2>
           <button class="icon-btn modal-close" id="btn-close">✕</button>
         </div>
         <div class="modal-body">
           <section class="settings-section">
-            <h3>🤖 AI провайдеры</h3>
+            <h3>⊞ AI провайдеры</h3>
             <div class="setting-group">
               <label for="key-openrouter">OpenRouter API Key:</label>
               <input type="password" id="key-openrouter" class="setting-input" value="${s.providerKeys.openrouter || ''}" placeholder="sk-or-v1-..." />
@@ -40,7 +40,7 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
-            <h3>🎯 Провайдер</h3>
+            <h3>◎ Провайдер</h3>
             <div class="setting-group">
               <label for="sel-provider">Провайдер:</label>
               <select id="sel-provider" class="setting-select">
@@ -51,7 +51,7 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
-            <h3>🧠 Модели для анализа</h3>
+            <h3>◇ Модели для анализа</h3>
             <div class="setting-group">
               <label for="inp-model">
                 Основная модель (извлечение идей):
@@ -91,7 +91,7 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
-            <h3>🔄 Fallback-модели</h3>
+            <h3>↻ Fallback-модели</h3>
             <div class="setting-group">
               <label for="inp-fallback">
                 Резервные модели (через запятую):
@@ -113,7 +113,7 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
-            <h3>🎨 Оформление</h3>
+            <h3>◑ Оформление</h3>
             <div class="setting-group">
               <label for="sel-theme">Тема:</label>
               <select id="sel-theme" class="setting-select">
@@ -138,7 +138,7 @@ export class SettingsModal {
         </div>
         <div class="modal-footer">
           <button class="secondary-btn" id="btn-cancel">Отменить</button>
-          <button class="primary-btn" id="btn-save">💾 Сохранить</button>
+          <button class="primary-btn" id="btn-save">Сохранить</button>
         </div>
       </div>`;
 

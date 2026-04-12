@@ -9,8 +9,8 @@ import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.
 import '../styles/components/idea-list.css';
 
 const TYPE_ICONS: Record<string, string> = {
-  definition: '📋', method: '🔧', theorem: '📐',
-  insight: '✦', example: '📝', analogy: '🔄',
+  definition: '', method: '\\', theorem: '/',
+  insight: '✦', example: '_', analogy: '↻',
 };
 const DEPTH_LABELS: Record<string, string> = { basic: 'Базовый', medium: 'Средний', advanced: 'Продвинутый' };
 const FAM_LABELS: Record<Familiarity, string> = { unknown: 'Не изучал', heard: 'Слышал', known: 'Знаю', new: 'Новая' };
@@ -52,15 +52,15 @@ export class IdeaListView {
       <div class="idea-list-view">
         <div class="view-header">
           <h2>✦ Идеи: ${book ? this.esc(book.title) : ''}</h2>
-          <button class="primary-btn" id="btn-analyze">🔍 Анализировать</button>
+          <button class="primary-btn" id="btn-analyze">Анализировать</button>
         </div>
         <div class="filters-bar">
           <select id="filter-fam" class="filter-select">
             <option value="all"${this.filters.familiarity === 'all' ? ' selected' : ''}>Все уровни знакомства</option>
-            <option value="unknown"${this.filters.familiarity === 'unknown' ? ' selected' : ''}>❌ Не изучал</option>
-            <option value="heard"${this.filters.familiarity === 'heard' ? ' selected' : ''}>⚠️ Слышал</option>
-            <option value="known"${this.filters.familiarity === 'known' ? ' selected' : ''}>✅ Знаю</option>
-            <option value="new"${this.filters.familiarity === 'new' ? ' selected' : ''}>🆕 Новые</option>
+            <option value="unknown"${this.filters.familiarity === 'unknown' ? ' selected' : ''}>[-] Не изучал</option>
+            <option value="heard"${this.filters.familiarity === 'heard' ? ' selected' : ''}>! Слышал</option>
+            <option value="known"${this.filters.familiarity === 'known' ? ' selected' : ''}>+ Знаю</option>
+            <option value="new"${this.filters.familiarity === 'new' ? ' selected' : ''}>new Новые</option>
           </select>
           <select id="filter-stat" class="filter-select">
             <option value="all"${this.filters.status === 'all' ? ' selected' : ''}>Все статусы</option>
@@ -84,7 +84,7 @@ export class IdeaListView {
         </div>
         <div class="ideas-container">
           ${ideas.length === 0 ? `
-            <div class="empty-state"><div class="empty-icon">🧠</div>
+            <div class="empty-state"><div class="empty-icon">◇</div>
             <p>Идеи ещё не извлечены</p><p class="empty-hint">Нажмите «Анализировать»</p></div>
           ` : ideas.map((i) => this.card(i)).join('')}
         </div>
@@ -106,7 +106,7 @@ export class IdeaListView {
         ${i.quote ? `<blockquote class="idea-quote">${this.esc(i.quote)}</blockquote>` : ''}
         <div class="idea-meta">
           <span>стр. ${i.pages.join(', ')}</span>
-          ${i.relations.length ? `<span>🔗 ${i.relations.length} связей</span>` : ''}
+            ${i.relations.length ? `<span class="relations-badge">${i.relations.length} связей</span>` : ''}
           <button class="btn-context" data-idea-id="${i.id}" data-book-id="${i.bookId}" data-pages="${i.pages.join(',')}">▽ Контекст</button>
           ${this.bookFilePath ? `
             ${i.pages.map((p, idx) => `
@@ -135,12 +135,12 @@ export class IdeaListView {
           </div>
         </div>
         <div class="idea-notes">
-          <label>📝 Заметки:</label>
+          <label>_ Заметки:</label>
           <textarea class="notes-textarea" data-idea-id="${i.id}" placeholder="Ваши заметки...">${this.esc(i.notes)}</textarea>
         </div>
         ${i.userTags?.length ? `<div class="idea-tags">${i.userTags.map(t => `<span class="tag">${this.esc(t)}</span>`).join('')}</div>` : ''}
         <div class="idea-card-footer">
-          <button class="btn-delete-idea" data-idea-id="${i.id}" title="Удалить идею">🗑️ Удалить</button>
+          <button class="btn-delete-idea" data-idea-id="${i.id}" title="Удалить идею">x Удалить</button>
         </div>
       </div>`;
   }
@@ -184,19 +184,19 @@ export class IdeaListView {
         if (!page || !this.bookFilePath) return;
 
         const original = btn.textContent;
-        btn.textContent = '⏳ Открываю...';
+        btn.textContent = '... Открываю...';
         btn.classList.add('btn-zathura-loading');
 
         const result = await openInZathura(this.bookFilePath, page, quote || undefined);
 
         if (result.launched) {
-          btn.textContent = '✅ Открыто!';
+          btn.textContent = '[ok]';
           if (result.searchHint) {
             // Show search hint as a tooltip-like element
             showZathuraHint(btn, result.searchHint);
           }
         } else {
-          btn.textContent = '📋 Скопировано';
+          btn.textContent = '[копия]';
           if (result.error) {
             showZathuraHint(btn, result.error);
           }
@@ -227,7 +227,7 @@ export class IdeaListView {
           return;
         }
 
-        el.textContent = '⏳ Загрузка...';
+        el.textContent = '... Загрузка...';
         el.classList.add('btn-zathura-loading');
 
         try {
@@ -293,12 +293,12 @@ export class IdeaListView {
         } else {
           // First click — ask for confirmation
           card.dataset.deleteConfirm = 'true';
-          btn.textContent = '🗑️ Точно удалить?';
+          btn.textContent = 'x Точно удалить?';
           btn.classList.add('delete-confirm');
           setTimeout(() => {
             if (card.dataset.deleteConfirm === 'true') {
               card.dataset.deleteConfirm = '';
-              btn.textContent = '🗑️ Удалить';
+              btn.textContent = 'x Удалить';
               btn.classList.remove('delete-confirm');
             }
           }, 3000);

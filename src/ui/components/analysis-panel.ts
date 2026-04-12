@@ -136,7 +136,7 @@ export class AnalysisPanel {
     panel.className = 'analysis-panel';
     panel.innerHTML = `
       <div class="analysis-card">
-        <h3>🔍 Анализ идей${this.initialOptions.chapterTitle ? `: ${this.esc(this.initialOptions.chapterTitle)}` : ''}</h3>
+        <h3>Анализ идей${this.initialOptions.chapterTitle ? `: ${this.esc(this.initialOptions.chapterTitle)}` : ''}</h3>
         ${previewHtml}
         <div class="mode-selection">
           <h4>Режим экстракции:</h4>
@@ -147,7 +147,7 @@ export class AnalysisPanel {
         <div class="range-inputs">
           <label>С страницы: <input type="number" id="page-from" min="1" max="${book.totalPages}" value="${defaultFrom}" /></label>
           <label>По страницу: <input type="number" id="page-to" min="1" max="${book.totalPages}" value="${defaultTo}" /></label>
-          <button class="secondary-btn" id="btn-repreview" title="Перепроверить текстовый слой для нового диапазона">🔄 Перепроверить</button>
+          <button class="secondary-btn" id="btn-repreview" title="Перепроверить текстовый слой для нового диапазона">↻ Перепроверить</button>
         </div>
         <div class="analysis-options">
           <label>Детализация:
@@ -159,9 +159,9 @@ export class AnalysisPanel {
           </label>
         </div>
         <div class="analysis-actions">
-          <button class="secondary-btn" id="btn-reconnect" title="Выберите PDF/DJVU файл повторно">🔗 Переподключить файл</button>
+          <button class="secondary-btn" id="btn-reconnect" title="Выберите PDF/DJVU файл повторно">⟷ Переподключить файл</button>
           <button class="primary-btn" id="btn-start">▶ Запустить</button>
-          <button class="secondary-btn" id="btn-cancel" style="display:none">⏹ Отменить</button>
+          <button class="secondary-btn" id="btn-cancel" style="display:none">Отменить</button>
           <button class="secondary-btn" id="btn-close">✕ Закрыть</button>
         </div>
         <div id="analysis-progress" class="analysis-progress" style="display:none">
@@ -239,7 +239,7 @@ export class AnalysisPanel {
     const previewSection = panel.querySelector('.text-preview-section');
     if (!previewSection) return;
 
-    previewSection.innerHTML = '<p class="preview-unavailable">⏳ Проверка текстового слоя...</p>';
+    previewSection.innerHTML = '<p class="preview-unavailable">... Проверка текстового слоя...</p>';
 
     try {
       const pagesText: Array<{ page: number; text: string }> = [];
@@ -324,11 +324,11 @@ export class AnalysisPanel {
       const book = await db.books.get(this.bookId);
       const handle = await reconnectFileHandleWithCheck(this.bookId, book?.filePath);
       if (!handle) {
-        alert('Не выбран файл. Нажмите «🔗 Подключить файл» чтобы выбрать PDF/DJVU.');
+        alert('Не выбран файл. Нажмите «⟷ Подключить файл» чтобы выбрать PDF/DJVU.');
         return;
       }
     } else if (access === 'denied') {
-      alert('Доступ к файлу запрещён. Нажмите «🔗 Подключить файл» чтобы выбрать файл заново.');
+      alert('Доступ к файлу запрещён. Нажмите «⟷ Подключить файл» чтобы выбрать файл заново.');
       return;
     }
 
@@ -403,7 +403,7 @@ export class AnalysisPanel {
         const book = await db.books.get(this.bookId);
         const canResume = book && book.lastAnalyzedPage >= pageFrom;
         const resumeMsg = canResume
-          ? `\n\n📋 Сохранён прогресс до стр. ${book.lastAnalyzedPage}. Откройте анализ заново — диапазон начнётся с未被обработанных страниц.`
+          ? `\n\nСохранён прогресс до стр. ${book.lastAnalyzedPage}. Откройте анализ заново — диапазон начнётся с未被обработанных страниц.`
           : '';
 
         progressText.textContent = `Ошибка: ${errMsg}${resumeMsg}`;

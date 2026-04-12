@@ -46,8 +46,8 @@ export class IdeaGraphView {
     this.container.innerHTML = `
       <div class="graph-view">
         <div class="view-header">
-          <h2>🕸️ Граф идей</h2>
-          <button class="secondary-btn" id="btn-graph-fit">🔍 Масштабировать</button>
+          <h2>~ Граф идей</h2>
+          <button class="secondary-btn" id="btn-graph-fit">Масштабировать</button>
         </div>
         <div class="graph-legend">
           <span class="legend-item"><span class="dot" style="background:#6B7280"></span> Не изучал</span>
@@ -58,7 +58,7 @@ export class IdeaGraphView {
         </div>
         <div class="graph-container">
           ${ideas.length === 0 ? `
-            <div class="empty-state"><div class="empty-icon">🕸️</div>
+            <div class="empty-state"><div class="empty-icon">~</div>
               <p>Граф пуст</p><p class="empty-hint">Сначала извлеките идеи</p></div>
           ` : '<div id="graph-canvas" class="graph-canvas"></div>'}
         </div>
