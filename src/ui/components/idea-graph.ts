@@ -2,6 +2,8 @@
 // Idea Graph View — vis-network force-directed graph
 // ============================================================
 
+import { DataSet } from 'vis-data';
+import { Network } from 'vis-network';
 import { db } from '../../db/index.js';
 import type { Idea } from '../../db/schema.js';
 import '../styles/components/idea-graph.css';
@@ -34,6 +36,7 @@ const EDGE_STYLES: Record<string, { color: string; width: number }> = {
 export class IdeaGraphView {
   private container: HTMLElement;
   private bookId: string;
+  private network: Network | null = null;
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -42,11 +45,13 @@ export class IdeaGraphView {
 
   async render(): Promise<void> {
     const ideas = await db.ideas.where('bookId').equals(this.bookId).toArray();
+    console.log(`[Graph] bookId=${this.bookId}, ideas found: ${ideas.length}`);
 
     this.container.innerHTML = `
       <div class="graph-view">
         <div class="view-header">
           <h2>~ Граф идей</h2>
+          <span class="idea-count">${ideas.length} идей</span>
           <button class="secondary-btn" id="btn-graph-fit">Масштабировать</button>
         </div>
         <div class="graph-legend">
@@ -56,7 +61,7 @@ export class IdeaGraphView {
           <span class="legend-item"><span class="dot" style="background:#DC2626"></span> Не понятно</span>
           <span class="legend-item"><span class="dot" style="background:#7C3AED"></span> Знакомо</span>
         </div>
-        <div class="graph-container">
+        <div class="graph-container" id="graph-wrapper">
           ${ideas.length === 0 ? `
             <div class="empty-state"><div class="empty-icon">~</div>
               <p>Граф пуст</p><p class="empty-hint">Сначала извлеките идеи</p></div>
@@ -64,72 +69,113 @@ export class IdeaGraphView {
         </div>
       </div>`;
 
-    if (ideas.length > 0) await this.initGraph(ideas);
+    if (ideas.length > 0) {
+      // Wait for layout so the canvas has real dimensions
+      requestAnimationFrame(() => {
+        this.initGraph(ideas);
+      });
+    }
     this.bindEvents();
   }
 
-  private async initGraph(ideas: Idea[]): Promise<void> {
+  private initGraph(ideas: Idea[]): void {
     try {
-      const vis = await import('vis-network');
       const canvas = document.getElementById('graph-canvas');
-      if (!canvas) return;
+      if (!canvas) {
+        console.error('[Graph] #graph-canvas element not found');
+        return;
+      }
 
-      const nodes = new vis.DataSet(ideas.map(idea => ({
-        id: idea.id,
-        label: idea.title,
-        title: `${idea.summary}\n\nСтр.: ${idea.pages.join(', ')}\nТип: ${idea.type}`,
-        shape: SHAPES[idea.type] || 'dot',
-        color: {
-          background: (STAT_COLORS[idea.status] || STAT_COLORS.unknown).bg,
-          border: (STAT_COLORS[idea.status] || STAT_COLORS.unknown).border,
-          highlight: { background: '#ffffff', border: '#ffffff' },
-        },
-        size: Math.max(15, idea.importance * 8),
-        font: { size: 12, color: '#e0e0e0' },
-        borderWidth: 2,
-        borderWidthSelected: 4,
-      })));
+      // Check canvas has real dimensions
+      const rect = canvas.getBoundingClientRect();
+      console.log(`[Graph] Canvas dimensions: ${rect.width}x${rect.height}`);
+      if (rect.width === 0 || rect.height === 0) {
+        console.error('[Graph] Canvas has zero dimensions, retrying after layout...');
+        // Retry once after a longer delay
+        setTimeout(() => {
+          const retryRect = canvas.getBoundingClientRect();
+          console.log(`[Graph] Retry dimensions: ${retryRect.width}x${retryRect.height}`);
+          if (retryRect.width > 0 && retryRect.height > 0) {
+            this.buildNetwork(canvas, ideas);
+          } else {
+            canvas.innerHTML = '<div class="empty-state"><p>Ошибка: контейнер графа не имеет размеров</p></div>';
+          }
+        }, 200);
+        return;
+      }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const edges = new vis.DataSet(ideas.flatMap(idea =>
-        idea.relations.map(rel => {
-          const es = EDGE_STYLES[rel.type] || { color: '#6B7280', width: 1 };
-          return {
-            id: `${idea.id}-${rel.targetId}`,
-            from: idea.id,
-            to: rel.targetId,
-            arrows: rel.type === 'prerequisite' ? 'to' : undefined,
-            color: { color: es.color, highlight: es.color },
-            width: es.width,
-            dashes: rel.type === 'analogous' ? [5, 5] : undefined,
-            title: `${rel.type}${rel.description ? ': ' + rel.description : ''}`,
-          };
-        }),
-      ));
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      new vis.Network(canvas as any, { nodes, edges }, {
-        physics: {
-          forceAtlas2Based: {
-            gravitationalConstant: -80, centralGravity: 0.01,
-            springLength: 150, springConstant: 0.08,
-          },
-          maxVelocity: 50, solver: 'forceAtlas2Based',
-          stabilization: { iterations: 150 },
-        },
-        interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
-        edges: { smooth: { type: 'continuous' as const, enabled: true, roundness: 0.5 } },
-      });
-
-      (canvas as HTMLElement).dataset.networkReady = 'true';
+      this.buildNetwork(canvas, ideas);
     } catch (err) {
-      console.error('Graph init failed:', err);
+      console.error('[Graph] Init failed:', err);
+      const canvas = document.getElementById('graph-canvas');
+      if (canvas) {
+        canvas.innerHTML = `<div class="empty-state"><p>Ошибка инициализации графа: ${(err as Error).message}</p></div>`;
+      }
     }
+  }
+
+  private buildNetwork(canvas: HTMLElement, ideas: Idea[]): void {
+    const nodes = new DataSet(ideas.map(idea => ({
+      id: idea.id,
+      label: idea.title,
+      title: `${idea.summary}\n\nСтр.: ${idea.pages.join(', ')}\nТип: ${idea.type}`,
+      shape: SHAPES[idea.type] || 'dot',
+      color: {
+        background: (STAT_COLORS[idea.status] || STAT_COLORS.unknown).bg,
+        border: (STAT_COLORS[idea.status] || STAT_COLORS.unknown).border,
+        highlight: { background: '#ffffff', border: '#ffffff' },
+      },
+      size: Math.max(15, idea.importance * 8),
+      font: { size: 12, color: '#e0e0e0' },
+      borderWidth: 2,
+      borderWidthSelected: 4,
+    })));
+
+    const edges = new DataSet(ideas.flatMap(idea =>
+      idea.relations.map(rel => {
+        const es = EDGE_STYLES[rel.type] || { color: '#6B7280', width: 1 };
+        return {
+          id: `${idea.id}-${rel.targetId}`,
+          from: idea.id,
+          to: rel.targetId,
+          arrows: rel.type === 'prerequisite' ? 'to' : undefined,
+          color: { color: es.color, highlight: es.color },
+          width: es.width,
+          dashes: rel.type === 'analogous' ? [5, 5] : undefined,
+          title: `${rel.type}${rel.description ? ': ' + rel.description : ''}`,
+        };
+      }),
+    ));
+
+    this.network = new Network(canvas as HTMLElement, { nodes, edges }, {
+      physics: {
+        forceAtlas2Based: {
+          gravitationalConstant: -80, centralGravity: 0.01,
+          springLength: 150, springConstant: 0.08,
+        },
+        maxVelocity: 50, solver: 'forceAtlas2Based',
+        stabilization: { iterations: 150 },
+      },
+      interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
+      edges: { smooth: { type: 'continuous' as const, enabled: true, roundness: 0.5 } },
+    });
+
+    // Fit the view after stabilization completes
+    this.network.once('stabilizationIterationsDone', () => {
+      this.network?.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' as any } });
+    });
+
+    // Also fit after a timeout as fallback (in case stabilization event doesn't fire)
+    setTimeout(() => {
+      this.network?.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' as any } });
+    }, 3000);
+
+    console.log(`[Graph] Network created: ${nodes.length} nodes, ${edges.length} edges`);
   }
 
   private bindEvents(): void {
     document.getElementById('btn-graph-fit')?.addEventListener('click', () => {
-      // TODO: network.fit()
+      this.network?.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' as any } });
     });
   }
 }

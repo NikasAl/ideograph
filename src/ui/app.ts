@@ -68,7 +68,7 @@ class App {
         <div class="app-actions">
           <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">⚡</button>
           <button class="icon-btn btn-about" id="btn-about" title="О расширении">i</button>
-          <button class="icon-btn" id="btn-settings" title="Настройки"></button>
+          <button class="icon-btn" id="btn-settings" title="Настройки">⚙</button>
         </div>
       </header>
 

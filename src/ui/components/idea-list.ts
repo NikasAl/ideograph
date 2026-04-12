@@ -97,7 +97,7 @@ export class IdeaListView {
     return `
       <div class="idea-card ${STAT_COLORS[i.status]}" data-idea-id="${i.id}">
         <div class="idea-card-header">
-          <span class="idea-type-icon">${TYPE_ICONS[i.type] || '📌'}</span>
+          <span class="idea-type-icon">${TYPE_ICONS[i.type] || '◇'}</span>
           <span class="idea-depth-badge depth-${i.depth}">${DEPTH_LABELS[i.depth]}</span>
           <span class="idea-importance">⭐ ${'★'.repeat(i.importance)}${'☆'.repeat(5 - i.importance)}</span>
         </div>
