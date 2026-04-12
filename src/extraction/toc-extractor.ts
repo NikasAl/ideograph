@@ -471,7 +471,7 @@ export function computePageRanges(entries: TOCEntry[], totalPages: number): void
         break;
       }
     }
-    entry.pageEnd = nextEntry ? nextEntry.page - 1 : totalPages;
+    entry.pageEnd = nextEntry ? Math.max(entry.page, nextEntry.page - 1) : totalPages;
   }
 }
 
