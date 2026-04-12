@@ -1,6 +1,8 @@
 // ============================================================
 // TOC Extractor — extracts, parses, validates, and manages
 // table-of-contents data for a book.
+//
+// Handles large TOCs by processing pages in batches.
 // ============================================================
 
 import type { AIProvider, ChatMessage, VisionMessage } from '../background/ai-client.js';
@@ -13,6 +15,16 @@ import { buildVisionMessage } from './vlm-extractor.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
 import { db } from '../db/index.js';
 import { extractTextFromPDFPage, renderPDFPageToImage } from './text-extractor.js';
+
+/** Max tokens for TOC LLM response — needs to be high for large TOCs */
+const TOC_MAX_TOKENS = 16384;
+
+/** Pages per batch for text/OCR TOC extraction */
+const TEXT_BATCH_SIZE = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ============================================================
 // Public API
@@ -28,19 +40,20 @@ export interface TOCExtractionOptions {
   ocrModel?: string;      // vision model for OCR
   vlmModel?: string;      // vision model for VLM
   fallbackModels?: string[];
+  requestDelayMs?: number; // delay between API requests
   onProgress?: (msg: string, pct: number) => void;
 }
 
 /**
  * Full TOC extraction pipeline:
- * 1. Get text/images from TOC pages
+ * 1. Get text/images from TOC pages (in batches)
  * 2. Send to LLM with TOC prompt
- * 3. Parse and validate response
+ * 3. Parse, deduplicate and validate response
  * 4. Compute page ranges
  * 5. Save to book.tableOfContents
  */
 export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]> {
-  const { bookId, tocPages, mode, pdfData, provider, model, onProgress } = opts;
+  const { bookId, tocPages, mode, pdfData, provider, model, onProgress, requestDelayMs } = opts;
   const ocrModel = opts.ocrModel || model;
   const vlmModel = opts.vlmModel || model;
   const fallbackModels = opts.fallbackModels;
@@ -48,120 +61,228 @@ export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
 
-  onProgress?.('Извлечение страниц оглавления...', 10);
-
-  let tocText: string;
+  const totalPagesCount = tocPages[1] - tocPages[0] + 1;
 
   if (mode === 'text') {
-    // Text mode: extract text from pages, concatenate
-    const texts: string[] = [];
-    for (let p = tocPages[0]; p <= tocPages[1]; p++) {
-      const pageText = await extractTextFromPDFPage(pdfData, p);
-      texts.push(pageText.text);
-    }
-    tocText = texts.join('\n\n');
+    return await extractTOCText({ bookId, tocPages, totalPagesCount, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book });
+  } else if (mode === 'ocr') {
+    return await extractTOCOcr({ bookId, tocPages, totalPagesCount, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book });
+  } else {
+    return await extractTOCVlm({ bookId, tocPages, totalPagesCount, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book });
+  }
+}
 
-    onProgress?.('Распознавание оглавления через LLM...', 40);
+// ============================================================
+// Mode: TEXT — extract text, batch, send to LLM
+// ============================================================
+
+async function extractTOCText(opts: {
+  bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  pdfData: ArrayBuffer; provider: AIProvider; model: string;
+  fallbackModels?: string[]; requestDelayMs?: number;
+  onProgress?: (msg: string, pct: number) => void;
+  book: { totalPages: number };
+}): Promise<TOCEntry[]> {
+  const { bookId, tocPages, totalPagesCount, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book } = opts;
+
+  // Step 1: Extract text from all TOC pages
+  const pageTexts: Array<{ page: number; text: string }> = [];
+  for (let p = tocPages[0]; p <= tocPages[1]; p++) {
+    const pct = 5 + Math.round(((p - tocPages[0]) / totalPagesCount) * 15);
+    onProgress?.(`Извлечение текста страницы ${p}...`, pct);
+    try {
+      const pageText = await extractTextFromPDFPage(pdfData, p);
+      pageTexts.push({ page: p, text: pageText.text });
+    } catch (err) {
+      console.warn(`[TOC] Failed to extract text from page ${p}:`, err);
+      pageTexts.push({ page: p, text: '' });
+    }
+  }
+
+  // Step 2: Split into batches
+  const batches = splitIntoBatches(pageTexts, TEXT_BATCH_SIZE);
+
+  // Step 3: Process each batch
+  const allRawItems: RawTOCItem[] = [];
+  for (let b = 0; b < batches.length; b++) {
+    if (b > 0 && requestDelayMs) await sleep(requestDelayMs);
+
+    const batch = batches[b];
+    const batchRange = [batch[0].page, batch[batch.length - 1].page] as [number, number];
+    const batchText = batch.map(p => p.text).join('\n\n');
+    const pct = 25 + Math.round((b / batches.length) * 50);
+    onProgress?.(`Распознавание (часть ${b + 1}/${batches.length}, стр. ${batchRange[0]}–${batchRange[1]})...`, pct);
+
     const messages: ChatMessage[] = [
       { role: 'system', content: EXTRACT_TOC_SYSTEM },
-      { role: 'user', content: extractTocUserText(tocText, tocPages) },
+      { role: 'user', content: extractTocUserText(batchText, batchRange) },
     ];
-    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
-    tocText = response.content;
 
-  } else if (mode === 'ocr') {
-    // OCR mode: render → vision LLM → markdown → text LLM
-    const markdowns: string[] = [];
-    for (let p = tocPages[0]; p <= tocPages[1]; p++) {
-      onProgress?.(`OCR страницы ${p} оглавления...`, 10 + Math.round(((p - tocPages[0]) / (tocPages[1] - tocPages[0] + 1)) * 30));
+    try {
+      const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true, maxTokens: TOC_MAX_TOKENS });
+      const partial = parseRawTOCResponse(response.content);
+      allRawItems.push(...partial);
+    } catch (err) {
+      console.warn(`[TOC] Batch ${b + 1} failed:`, err);
+      // Continue with other batches rather than failing completely
+    }
+  }
+
+  if (allRawItems.length === 0) {
+    throw new Error('Не удалось извлечь ни одного элемента оглавления. Проверьте диапазон страниц и режим экстракции.');
+  }
+
+  // Step 4: Deduplicate and build entries
+  return finalizeExtraction(allRawItems, bookId, book.totalPages, onProgress);
+}
+
+// ============================================================
+// Mode: OCR — render pages, OCR each, batch text, send to LLM
+// ============================================================
+
+async function extractTOCOcr(opts: {
+  bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  pdfData: ArrayBuffer; provider: AIProvider; model: string; ocrModel: string;
+  fallbackModels?: string[]; requestDelayMs?: number;
+  onProgress?: (msg: string, pct: number) => void;
+  book: { totalPages: number };
+}): Promise<TOCEntry[]> {
+  const { bookId, tocPages, totalPagesCount, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
+
+  // Phase 1: OCR each page to markdown
+  const pageMarkdowns: Array<{ page: number; markdown: string }> = [];
+  for (let p = tocPages[0]; p <= tocPages[1]; p++) {
+    const pct = 5 + Math.round(((p - tocPages[0]) / totalPagesCount) * 25);
+    onProgress?.(`OCR страницы ${p} оглавления...`, pct);
+
+    if (p > tocPages[0] && requestDelayMs) await sleep(requestDelayMs);
+
+    try {
       const imageBase64 = await renderPDFPageToImage(pdfData, p);
       const visionMsg = buildVisionMessage({ pageNumber: p, imageBase64 }, ocrPageUserPrompt(p));
       const ocrResponse = await provider.chatVision(
         [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
         { model: ocrModel, fallbackModels },
       );
-      markdowns.push(ocrResponse.content.trim());
+      pageMarkdowns.push({ page: p, markdown: ocrResponse.content.trim() });
+    } catch (err) {
+      console.warn(`[TOC] OCR page ${p} failed:`, err);
+      pageMarkdowns.push({ page: p, markdown: '' });
     }
-
-    onProgress?.('Распознавание оглавления через LLM...', 50);
-    const combinedMarkdown = markdowns.join('\n\n---\n\n');
-    const messages: ChatMessage[] = [
-      { role: 'system', content: EXTRACT_TOC_SYSTEM },
-      { role: 'user', content: extractTocUserText(combinedMarkdown, tocPages) },
-    ];
-    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
-    tocText = response.content;
-
-  } else {
-    // VLM mode: render → vision LLM directly
-    const pageNumbers: number[] = [];
-    const visionMessages: VisionMessage[] = [
-      { role: 'system', content: EXTRACT_TOC_SYSTEM },
-    ];
-
-    for (let p = tocPages[0]; p <= tocPages[1]; p++) {
-      onProgress?.(`Анализ страницы ${p} оглавления через VLM...`, 10 + Math.round(((p - tocPages[0]) / (tocPages[1] - tocPages[0] + 1)) * 30));
-      const imageBase64 = await renderPDFPageToImage(pdfData, p);
-      pageNumbers.push(p);
-      if (p === tocPages[0]) {
-        // First page — create user message
-        const visionMsg = buildVisionMessage({ pageNumber: p, imageBase64 }, extractTocUserVision(pageNumbers));
-        visionMessages.push(visionMsg);
-      } else {
-        // Additional pages — append images to existing user message
-        // For multi-page TOC, we send each page separately to avoid token limits
-        const singlePageMsgs: VisionMessage[] = [
-          { role: 'system', content: EXTRACT_TOC_SYSTEM },
-          buildVisionMessage({ pageNumber: p, imageBase64 }, extractTocUserVision([p])),
-        ];
-        const response = await provider.chatVision(singlePageMsgs, { model: vlmModel, fallbackModels, jsonMode: true });
-        const partial = parseRawTOCResponse(response.content);
-        if (partial.length > 0) {
-          // Store partial results
-          if (!_partialEntries) _partialEntries = [];
-          _partialEntries.push(...partial);
-        }
-        continue;
-      }
-    }
-
-    if (visionMessages.length > 1) {
-      // Process first page result
-      const response = await provider.chatVision(visionMessages, { model: vlmModel, fallbackModels, jsonMode: true });
-      tocText = response.content;
-    } else {
-      tocText = '[]';
-    }
-
-    // Merge with partial entries from subsequent pages
-    const mainEntries = parseRawTOCResponse(tocText);
-    const partialEntries = _partialEntries || [];
-    // Combine and deduplicate
-    const allRaw = [...mainEntries, ...partialEntries];
-    _partialEntries = undefined;
-
-    onProgress?.('Обработка результатов...', 70);
-    const entries = buildTOCEntries(allRaw, bookId, book.totalPages);
-    computePageRanges(entries, book.totalPages);
-
-    await db.books.update(bookId, { tableOfContents: entries, updatedAt: Date.now() });
-    onProgress?.('Оглавление извлечено!', 100);
-    return entries;
   }
 
-  // For text and OCR modes — parse the single response
-  onProgress?.('Обработка результатов...', 70);
-  const rawEntries = parseRawTOCResponse(tocText);
-  const entries = buildTOCEntries(rawEntries, bookId, book.totalPages);
-  computePageRanges(entries, book.totalPages);
+  // Phase 2: Batch OCR results and extract TOC structure
+  const batches = splitIntoBatches(pageMarkdowns, TEXT_BATCH_SIZE);
+  const allRawItems: RawTOCItem[] = [];
+
+  for (let b = 0; b < batches.length; b++) {
+    if (requestDelayMs) await sleep(requestDelayMs);
+
+    const batch = batches[b];
+    const batchRange = [batch[0].page, batch[batch.length - 1].page] as [number, number];
+    const batchText = batch.map(p => p.markdown).join('\n\n---\n\n');
+    const pct = 35 + Math.round((b / batches.length) * 45);
+    onProgress?.(`Распознавание структуры (часть ${b + 1}/${batches.length})...`, pct);
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: EXTRACT_TOC_SYSTEM },
+      { role: 'user', content: extractTocUserText(batchText, batchRange) },
+    ];
+
+    try {
+      const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true, maxTokens: TOC_MAX_TOKENS });
+      const partial = parseRawTOCResponse(response.content);
+      allRawItems.push(...partial);
+    } catch (err) {
+      console.warn(`[TOC] Batch ${b + 1} failed:`, err);
+    }
+  }
+
+  if (allRawItems.length === 0) {
+    throw new Error('Не удалось извлечь ни одного элемента оглавления. Проверьте диапазон страниц и режим экстракции.');
+  }
+
+  return finalizeExtraction(allRawItems, bookId, book.totalPages, onProgress);
+}
+
+// ============================================================
+// Mode: VLM — vision LLM analyzes page images directly
+// ============================================================
+
+async function extractTOCVlm(opts: {
+  bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  pdfData: ArrayBuffer; provider: AIProvider; vlmModel: string;
+  fallbackModels?: string[]; requestDelayMs?: number;
+  onProgress?: (msg: string, pct: number) => void;
+  book: { totalPages: number };
+}): Promise<TOCEntry[]> {
+  const { bookId, tocPages, totalPagesCount, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
+
+  const allRawItems: RawTOCItem[] = [];
+
+  for (let p = tocPages[0]; p <= tocPages[1]; p++) {
+    const pct = 10 + Math.round(((p - tocPages[0]) / totalPagesCount) * 70);
+    onProgress?.(`Анализ страницы ${p} через VLM...`, pct);
+
+    if (p > tocPages[0] && requestDelayMs) await sleep(requestDelayMs);
+
+    try {
+      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const visionMsgs: VisionMessage[] = [
+        { role: 'system', content: EXTRACT_TOC_SYSTEM },
+        buildVisionMessage({ pageNumber: p, imageBase64 }, extractTocUserVision([p])),
+      ];
+      const response = await provider.chatVision(visionMsgs, { model: vlmModel, fallbackModels, jsonMode: true, maxTokens: TOC_MAX_TOKENS });
+      const partial = parseRawTOCResponse(response.content);
+      allRawItems.push(...partial);
+    } catch (err) {
+      console.warn(`[TOC] VLM page ${p} failed:`, err);
+    }
+  }
+
+  if (allRawItems.length === 0) {
+    throw new Error('Не удалось извлечь ни одного элемента оглавления. Проверьте диапазон страниц и режим экстракции.');
+  }
+
+  return finalizeExtraction(allRawItems, bookId, book.totalPages, onProgress);
+}
+
+// ============================================================
+// Common: deduplicate, build entries, compute ranges, save
+// ============================================================
+
+async function finalizeExtraction(
+  rawItems: RawTOCItem[],
+  bookId: string,
+  totalPages: number,
+  onProgress?: (msg: string, pct: number) => void,
+): Promise<TOCEntry[]> {
+  // Deduplicate by title+page
+  const seen = new Set<string>();
+  const uniqueItems = rawItems.filter(item => {
+    const key = `${(item.title || '').toLowerCase().trim()}_${item.page}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  onProgress?.('Обработка результатов...', 85);
+  const entries = buildTOCEntries(uniqueItems, bookId, totalPages);
+  computePageRanges(entries, totalPages);
 
   await db.books.update(bookId, { tableOfContents: entries, updatedAt: Date.now() });
-  onProgress?.('Оглавление извлечено!', 100);
+  onProgress?.(`Оглавление извлечено! ${entries.length} элементов.`, 100);
   return entries;
 }
 
-// Temporary storage for multi-page VLM partial results
-let _partialEntries: RawTOCItem[] | undefined;
+/** Split an array into chunks of at most `size` elements */
+function splitIntoBatches<T>(items: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    batches.push(items.slice(i, i + size));
+  }
+  return batches;
+}
 
 // ============================================================
 // Summarization
@@ -172,6 +293,7 @@ export interface SummarizeOptions {
   provider: AIProvider;
   model: string;
   fallbackModels?: string[];
+  requestDelayMs?: number;
   onProgress?: (msg: string, pct: number) => void;
 }
 
@@ -180,7 +302,7 @@ export interface SummarizeOptions {
  * Processes chapters (level 1) only for cost efficiency.
  */
 export async function summarizeTOCChapters(opts: SummarizeOptions): Promise<void> {
-  const { bookId, provider, model, fallbackModels, onProgress } = opts;
+  const { bookId, provider, model, fallbackModels, requestDelayMs, onProgress } = opts;
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
 
@@ -194,6 +316,8 @@ export async function summarizeTOCChapters(opts: SummarizeOptions): Promise<void
   for (let i = 0; i < chapters.length; i++) {
     const pct = Math.round(((i + 1) / chapters.length) * 100);
     onProgress?.(`Суммаризация главы ${i + 1}/${chapters.length}: ${chapters[i].title}...`, pct);
+
+    if (i > 0 && requestDelayMs) await sleep(requestDelayMs);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: SUMMARIZE_CHAPTER_SYSTEM },
@@ -325,7 +449,6 @@ function buildTOCEntries(rawItems: RawTOCItem[], bookId: string, totalPages: num
   }));
 
   // Step 2: Resolve parentId from parentTitle
-  // Build title → id map for matching
   const titleToId = new Map<string, string>();
   for (const entry of entries) {
     titleToId.set(entry.title.toLowerCase().trim(), entry.id);
@@ -341,8 +464,7 @@ function buildTOCEntries(rawItems: RawTOCItem[], bookId: string, totalPages: num
     }
   }
 
-  // Step 3: If parentId resolution failed, try positional fallback
-  // For level > 1 entries without parentId, find closest preceding level-1 entry
+  // Step 3: Positional fallback — for entries without parentId, find closest preceding higher-level entry
   for (let i = 0; i < entries.length; i++) {
     if (entries[i].level > 1 && !entries[i].parentId) {
       for (let j = i - 1; j >= 0; j--) {

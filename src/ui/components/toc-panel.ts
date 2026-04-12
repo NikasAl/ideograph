@@ -258,6 +258,14 @@ export class TOCPanel {
     this.isExtracting = true;
     this.hideError();
 
+    // Immediately update button and progress in DOM (no full re-render)
+    const extractBtn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
+    if (extractBtn) {
+      extractBtn.disabled = true;
+      extractBtn.textContent = '⏳ Распознаём...';
+    }
+    this.updateProgress('Подготовка...', 5);
+
     try {
       const settings = await getSettings();
       const apiKey = settings.providerKeys[settings.activeProvider];
@@ -292,6 +300,7 @@ export class TOCPanel {
         ocrModel: settings.ocrModel,
         vlmModel: settings.vlmModel,
         fallbackModels: settings.fallbackModels.split(',').filter(Boolean),
+        requestDelayMs: settings.requestDelayMs,
         onProgress: (msg, pct) => this.updateProgress(msg, pct),
       });
 
@@ -302,6 +311,12 @@ export class TOCPanel {
       this.showError(`Ошибка: ${msg}`);
     } finally {
       this.isExtracting = false;
+      // Restore button state without full re-render
+      const btn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🔍 Распознать оглавление';
+      }
     }
   }
 
@@ -320,6 +335,7 @@ export class TOCPanel {
         provider,
         model: settings.activeModel,
         fallbackModels: settings.fallbackModels.split(',').filter(Boolean),
+        requestDelayMs: settings.requestDelayMs,
         onProgress: (msg, pct) => this.updateProgress(msg, pct),
       });
 
