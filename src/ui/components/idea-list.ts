@@ -4,6 +4,7 @@
 
 import { db } from '../../db/index.js';
 import type { Idea, Familiarity, IdeaStatus } from '../../db/schema.js';
+import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
 import '../styles/components/idea-list.css';
@@ -37,8 +38,11 @@ export class IdeaListView {
     const book = await db.books.get(this.bookId);
     this.bookFilePath = book?.filePath;
     const toc = book?.tableOfContents || [];
+    const pageOffset = book?.pageOffset || 0;
     const chapters = toc.filter(e => e.level === 1);
     const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
+    // Re-compute chapterIds with current pageOffset so chapter filter works correctly
+    assignChapterIds(allIdeas, toc, pageOffset);
     const ideas = this.applyFilters(allIdeas);
 
     const chapterOptions = chapters.length > 0

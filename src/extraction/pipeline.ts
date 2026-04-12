@@ -16,7 +16,7 @@ import { buildVisionMessage } from './vlm-extractor.js';
 import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DETAIL_INSTRUCTIONS } from './prompts/extract-ideas.js';
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
-import { findChapterForPage } from './toc-extractor.js';
+import { findChapterForPage, assignChapterIds } from './toc-extractor.js';
 import { chapterContextBlock } from './prompts/toc-prompts.js';
 
 function sleep(ms: number): Promise<void> {
@@ -417,13 +417,9 @@ async function finalizeIdeas(opts: {
   // === Attach chapterId from TOC ===
   const currentBook = await db.books.get(bookId);
   const chapterToc = currentBook ? (currentBook.tableOfContents || []) : [];
+  const pageOffset = currentBook?.pageOffset || 0;
   if (chapterToc.length > 0) {
-    for (const idea of ideas) {
-      const chapter = findChapterForPage(idea.pages[0], chapterToc);
-      if (chapter) {
-        idea.chapterId = chapter.id;
-      }
-    }
+    assignChapterIds(ideas, chapterToc, pageOffset);
   }
 
   // === Save to DB ===

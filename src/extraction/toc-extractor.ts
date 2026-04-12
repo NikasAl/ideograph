@@ -375,11 +375,26 @@ export function computePageRanges(entries: TOCEntry[], totalPages: number): void
 
 /**
  * Find the top-level chapter (level 1) that contains the given page.
+ * @param page — book page number (NOT document page)
  */
 export function findChapterForPage(page: number, toc: TOCEntry[]): TOCEntry | undefined {
   return toc
     .filter(e => e.level === 1 && e.pageEnd !== undefined)
     .find(e => page >= e.page && page <= e.pageEnd!);
+}
+
+/**
+ * Re-assign chapterId to ideas based on their pages and the book's pageOffset.
+ * Converts document page numbers to book page numbers before matching.
+ */
+export function assignChapterIds(ideas: Array<{ id: string; pages: number[]; chapterId?: string }>, toc: TOCEntry[], pageOffset: number): void {
+  if (toc.length === 0) return;
+  const chapters = toc.filter(e => e.level === 1 && e.pageEnd !== undefined);
+  for (const idea of ideas) {
+    const bookPage = (idea.pages[0] || 1) - pageOffset;
+    const chapter = chapters.find(e => bookPage >= e.page && bookPage <= e.pageEnd!);
+    idea.chapterId = chapter?.id;
+  }
 }
 
 /**
