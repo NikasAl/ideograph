@@ -5,6 +5,7 @@
 import { db } from '../../db/index.js';
 import type { Book, ExtractionMode } from '../../db/schema.js';
 import { storeFileHandle, hasFileHandle, ensureFileAccess, reconnectFileHandleWithCheck, deleteStoredHandle } from '../utils/file-store.js';
+import { openInReader as nativeOpenInReader } from '../utils/reader-integration.js';
 import '../styles/components/book-list.css';
 
 export class BookListView {
@@ -130,10 +131,10 @@ export class BookListView {
     });
 
     this.container.querySelectorAll('.btn-open-reader').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const bookId = (btn as HTMLElement).dataset.bookId;
         const page = (btn as HTMLElement).dataset.page || '1';
-        this.openInReader(bookId!, Number(page));
+        await this.handleOpenReader(btn as HTMLElement, bookId!, Number(page));
       });
     });
 
@@ -208,12 +209,23 @@ export class BookListView {
     }
   }
 
-  private async openInReader(bookId: string, page: number): Promise<void> {
-    const book = await db.books.get(bookId);
-    if (!book) return;
-    const cmd = `zathura -f ${page} "${book.filePath || book.title}"`;
-    try { await navigator.clipboard.writeText(cmd); } catch { /* noop */ }
-    alert(`Команда скопирована:\n\n${cmd}`);
+  private async handleOpenReader(btn: HTMLElement, bookId: string, page: number): Promise<void> {
+    const originalText = btn.textContent || '↗';
+    try {
+      const result = await nativeOpenInReader(bookId, page);
+      if (result.launched) {
+        btn.textContent = '[ok]';
+      } else if (result.command) {
+        btn.textContent = '[копия]';
+      } else {
+        btn.textContent = '[!]';
+        if (result.error) console.warn('Reader error:', result.error);
+      }
+    } catch (err) {
+      btn.textContent = '[!]';
+      console.warn('Reader error:', err);
+    }
+    setTimeout(() => { btn.textContent = originalText; }, 2000);
   }
 
   private esc(s: string): string {
