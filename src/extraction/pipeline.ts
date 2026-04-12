@@ -12,6 +12,7 @@ import type { Idea, LLMExtractedIdea, ExtractionMode } from '../db/schema.js';
 import type { AIProvider, ChatMessage } from '../background/ai-client.js';
 import { evaluateTextLayer } from './mode-detector.js';
 import { extractTextFromPDFRange, renderPDFPageToImage, extractTextFromPDFPage } from './text-extractor.js';
+import { extractTextFromDJVURange, renderDJVUPageToImage, extractTextFromDJVUPage } from './djvu-extractor.js';
 import { buildVisionMessage } from './vlm-extractor.js';
 import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DETAIL_INSTRUCTIONS } from './prompts/extract-ideas.js';
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
@@ -79,7 +80,9 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   let firstPageText;
   let qualityReport: ReturnType<typeof evaluateTextLayer>;
   try {
-    firstPageText = await extractTextFromPDFPage(pdfData, pageFrom);
+    firstPageText = format === 'djvu'
+      ? await extractTextFromDJVUPage(pdfData, pageFrom)
+      : await extractTextFromPDFPage(pdfData, pageFrom);
     qualityReport = evaluateTextLayer(firstPageText.text, format);
     // Cache text layer info
     await cacheTextLayer(bookId, pageFrom, firstPageText.text, firstPageText.hasTextLayer, qualityReport.score);
@@ -96,16 +99,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   try {
     // === MODE: TEXT ===
     if (effectiveMode === 'text') {
-      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc });
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc });
     }
 
     // === MODE: OCR ===
     if (effectiveMode === 'ocr') {
-      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
+      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
     }
 
     // === MODE: VLM ===
-    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
+    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
   } catch (err) {
     // Log error analysis for debugging and resume support
     await logAnalysisError(bookId, pageFrom, pageTo, effectiveMode, provider, model, err);
@@ -142,17 +145,19 @@ async function logAnalysisError(
 async function runTextPipeline(opts: {
   bookId: string; pageFrom: number; pageTo: number;
   provider: AIProvider; model: string; detailInstruction: string;
-  pdfData: ArrayBuffer; signal?: AbortSignal;
+  pdfData: ArrayBuffer; format: 'pdf' | 'djvu'; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
   toc: import('../db/schema.js').TOCEntry[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
-  const pagesText = await extractTextFromPDFRange(pdfData, pageFrom, pageTo);
+  const pagesText = format === 'djvu'
+    ? await extractTextFromDJVURange(pdfData, pageFrom, pageTo)
+    : await extractTextFromPDFRange(pdfData, pageFrom, pageTo);
 
   // Cache all pages text
   for (let i = 0; i < pagesText.length; i++) {
@@ -208,13 +213,13 @@ async function runTextPipeline(opts: {
 async function runOcrPipeline(opts: {
   bookId: string; pageFrom: number; pageTo: number;
   provider: AIProvider; model: string; ocrModel: string; detailInstruction: string;
-  pdfData: ArrayBuffer; signal?: AbortSignal;
+  pdfData: ArrayBuffer; format: 'pdf' | 'djvu'; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
 
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
@@ -231,7 +236,9 @@ async function runOcrPipeline(opts: {
     if (p > pageFrom && requestDelayMs) await sleep(requestDelayMs);
 
     try {
-      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const imageBase64 = format === 'djvu'
+        ? await renderDJVUPageToImage(pdfData, p)
+        : await renderPDFPageToImage(pdfData, p);
       const visionMsg = buildVisionMessage(
         { pageNumber: p, imageBase64 },
         ocrPageUserPrompt(p),
@@ -298,13 +305,13 @@ async function runOcrPipeline(opts: {
 async function runVlmPipeline(opts: {
   bookId: string; pageFrom: number; pageTo: number;
   provider: AIProvider; vlmModel: string; detailInstruction: string;
-  pdfData: ArrayBuffer; signal?: AbortSignal;
+  pdfData: ArrayBuffer; format: 'pdf' | 'djvu'; signal?: AbortSignal;
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
+  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
@@ -320,7 +327,9 @@ async function runVlmPipeline(opts: {
     if (p > pageFrom && requestDelayMs) await sleep(requestDelayMs);
 
     try {
-      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const imageBase64 = format === 'djvu'
+        ? await renderDJVUPageToImage(pdfData, p)
+        : await renderPDFPageToImage(pdfData, p);
       const visionMsg = buildVisionMessage(
         { pageNumber: p, imageBase64 },
         extractIdeasUserVision(p),

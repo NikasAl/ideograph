@@ -99,65 +99,6 @@ export async function getPDFPageCount(pdfData: ArrayBuffer): Promise<number> {
   return pdf.numPages;
 }
 
-// ============================================================
-// DJVU page count — scan IFF chunks for FORM:DJVU pages
-// ============================================================
-
-/**
- * Read a 4-byte big-endian tag as a string from DataView.
- */
-function readTag(view: DataView, offset: number): string {
-  return String.fromCharCode(
-    view.getUint8(offset),
-    view.getUint8(offset + 1),
-    view.getUint8(offset + 2),
-    view.getUint8(offset + 3),
-  );
-}
-
-/**
- * Get the total page count of a DJVU file by scanning for FORM:DJVU chunks.
- *
- * DJVU uses IFF container format:
- *   FORM <size:u32> <type:4bytes> <data>
- * Bundled multi-page DJVU: FORM:DJVM containing FORM:DJVU page chunks.
- *
- * This function recursively scans the IFF structure and counts every
- * FORM:DJVU chunk found at any nesting level.
- */
-export function getDJVUPageCount(data: ArrayBuffer): number {
-  const view = new DataView(data);
-  let count = 0;
-
-  function scanChunks(offset: number, end: number): void {
-    while (offset + 8 <= end) {
-      const tag = readTag(view, offset);
-      const size = view.getUint32(offset + 4);
-
-      if (size === 0 || offset + 8 + size > end) break; // invalid or truncated
-
-      if (tag === 'FORM' && offset + 12 <= end) {
-        const formType = readTag(view, offset + 8);
-
-        if (formType === 'DJVU') {
-          count++;
-        }
-
-        // Recurse into FORM containers (DJVM = multi-page, others may nest too)
-        if (formType === 'DJVM' || formType === 'DJVI') {
-          scanChunks(offset + 12, offset + 8 + size);
-        }
-      }
-
-      // Advance: 8 (tag+size) + size; align to even boundary
-      offset += 8 + size + (size % 2);
-    }
-  }
-
-  scanChunks(0, data.byteLength);
-  return count;
-}
-
 /**
  * Extract text from a single page using an already-loaded PDF document.
  * Used by extractTextFromPDFRange to avoid re-parsing the same PDF.

@@ -80,6 +80,7 @@ export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]
 export interface OutlineExtractionOptions {
   bookId: string;
   pdfData: ArrayBuffer;
+  format?: 'pdf' | 'djvu';
   onProgress?: (msg: string, pct: number) => void;
 }
 
@@ -93,25 +94,37 @@ export interface OutlineExtractionOptions {
  * Returns null if the PDF has no outline.
  */
 export async function extractTOCFromOutline(opts: OutlineExtractionOptions): Promise<TOCEntry[] | null> {
-  const { bookId, pdfData, onProgress } = opts;
+  const { bookId, pdfData, format, onProgress } = opts;
 
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
 
-  onProgress?.('Чтение bookmarks из PDF...', 10);
-
-  const outlineItems = await extractPDFOutline(pdfData);
-  if (!outlineItems || outlineItems.length === 0) {
-    return null;
-  }
-
-  onProgress?.(`Найдено ${outlineItems.length} элементов в bookmarks`, 40);
-
-  // Convert document page numbers to book page numbers
   const offset = book.pageOffset || 0;
+  const isDJVU = format === 'djvu';
 
-  // Build flat list of RawTOCItems with parentId resolution
-  const entries = buildEntriesFromOutline(outlineItems, bookId, book.totalPages, offset);
+  onProgress?.(isDJVU ? 'Чтение bookmarks из DJVU...' : 'Чтение bookmarks из PDF...', 10);
+
+  let entries: TOCEntry[];
+
+  if (isDJVU) {
+    // DJVU: use DjVu.js to read NAVM bookmarks
+    const { extractDJVUBookmarks } = await import('./djvu-extractor.js');
+    const bookmarks = extractDJVUBookmarks(pdfData);
+    if (!bookmarks || bookmarks.length === 0) {
+      return null;
+    }
+    onProgress?.(`Найдено ${bookmarks.length} элементов в bookmarks`, 40);
+    const flatItems = flattenDJVUBookmarks(bookmarks);
+    entries = buildEntriesFromOutline(flatItems, bookId, book.totalPages, offset);
+  } else {
+    // PDF: use pdfjsLib to read outline
+    const outlineItems = await extractPDFOutline(pdfData);
+    if (!outlineItems || outlineItems.length === 0) {
+      return null;
+    }
+    onProgress?.(`Найдено ${outlineItems.length} элементов в bookmarks`, 40);
+    entries = buildEntriesFromOutline(outlineItems, bookId, book.totalPages, offset);
+  }
 
   onProgress?.('Вычисление диапазонов страниц...', 70);
   computePageRanges(entries, book.totalPages);
@@ -176,6 +189,46 @@ function buildEntriesFromOutline(
   }
 
   return entries;
+}
+
+/**
+ * Flatten DJVU bookmarks (NAVM) tree into a PDFOutlineItem[] compatible list.
+ * DJVU bookmarks have { description, url, children } structure.
+ * URLs are like "#N" (page number) or "#id" (named reference).
+ */
+function flattenDJVUBookmarks(
+  bookmarks: Array<{ description: string; url: string; children?: Array<{ description: string; url: string; children?: unknown[] }> }>,
+): PDFOutlineItem[] {
+  const items: PDFOutlineItem[] = [];
+
+  function walk(nodes: typeof bookmarks, level: number): void {
+    if (level > 3) return;
+    for (const node of nodes) {
+      const title = (node.description || '').trim();
+      if (!title) continue;
+
+      // Parse page from URL — format is "#N" or "#id"
+      let page = 0;
+      if (node.url && node.url.startsWith('#')) {
+        const ref = node.url.slice(1);
+        const num = Math.round(Number(ref));
+        if (num >= 1) page = num;
+      }
+
+      const children = node.children || [];
+      if (page > 0) {
+        items.push({ title, page, level, childCount: children.length });
+      }
+
+      // Recurse into children
+      if (children.length > 0) {
+        walk(children as typeof bookmarks, level + 1);
+      }
+    }
+  }
+
+  walk(bookmarks, 1);
+  return items;
 }
 
 // ============================================================

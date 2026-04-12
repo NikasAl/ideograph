@@ -422,11 +422,14 @@ export class TOCPanel {
       const entries = await extractTOCFromOutline({
         bookId: this.bookId,
         pdfData,
+        format: book.format,
         onProgress: (msg, pct) => this.updateProgress(msg, pct),
       });
 
       if (!entries) {
-        this.showError('В PDF нет встроенного оглавления (bookmarks). Попробуйте распознать через LLM.');
+        this.showError(book.format === 'djvu'
+          ? 'В DJVU нет встроенного оглавления (bookmarks). Попробуйте распознать через LLM.'
+          : 'В PDF нет встроенного оглавления (bookmarks). Попробуйте распознать через LLM.');
         return;
       }
 
