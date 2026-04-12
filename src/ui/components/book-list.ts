@@ -179,6 +179,9 @@ export class BookListView {
         }
       } else {
         extractionMode = 'vlm';
+        const { getDJVUPageCount } = await import('../../extraction/text-extractor.js');
+        const buffer = await file.arrayBuffer();
+        totalPages = getDJVUPageCount(buffer);
       }
 
       const book: Book = {
