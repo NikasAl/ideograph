@@ -14,7 +14,8 @@ import {
 import { buildVisionMessage } from './vlm-extractor.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
 import { db } from '../db/index.js';
-import { extractTextFromPDFPage, renderPDFPageToImage } from './text-extractor.js';
+import { extractTextFromPDFPage, renderPDFPageToImage, extractPDFOutline } from './text-extractor.js';
+import type { PDFOutlineItem } from './text-extractor.js';
 
 /** Max tokens for TOC LLM response — needs to be high for large TOCs */
 const TOC_MAX_TOKENS = 16384;
@@ -70,6 +71,111 @@ export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]
   } else {
     return await extractTOCVlm({ bookId, tocPages, totalPagesCount, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book });
   }
+}
+
+// ============================================================
+// Mode: OUTLINE — extract TOC from PDF built-in bookmarks
+// ============================================================
+
+export interface OutlineExtractionOptions {
+  bookId: string;
+  pdfData: ArrayBuffer;
+  onProgress?: (msg: string, pct: number) => void;
+}
+
+/**
+ * Extract TOC from PDF's built-in outline (bookmarks).
+ * No LLM required — reads the document's embedded table-of-contents.
+ *
+ * Outline items have document page numbers. The function converts them
+ * to book page numbers using the stored pageOffset.
+ *
+ * Returns null if the PDF has no outline.
+ */
+export async function extractTOCFromOutline(opts: OutlineExtractionOptions): Promise<TOCEntry[] | null> {
+  const { bookId, pdfData, onProgress } = opts;
+
+  const book = await db.books.get(bookId);
+  if (!book) throw new Error(`Книга ${bookId} не найдена`);
+
+  onProgress?.('Чтение bookmarks из PDF...', 10);
+
+  const outlineItems = await extractPDFOutline(pdfData);
+  if (!outlineItems || outlineItems.length === 0) {
+    return null;
+  }
+
+  onProgress?.(`Найдено ${outlineItems.length} элементов в bookmarks`, 40);
+
+  // Convert document page numbers to book page numbers
+  const offset = book.pageOffset || 0;
+
+  // Build flat list of RawTOCItems with parentId resolution
+  const entries = buildEntriesFromOutline(outlineItems, bookId, book.totalPages, offset);
+
+  onProgress?.('Вычисление диапазонов страниц...', 70);
+  computePageRanges(entries, book.totalPages);
+
+  onProgress?.(`Оглавление из bookmarks: ${entries.length} элементов`, 90);
+
+  await db.books.update(bookId, { tableOfContents: entries, updatedAt: Date.now() });
+  onProgress?.(`Готово! ${entries.length} элементов.`, 100);
+  return entries;
+}
+
+/**
+ * Convert PDF outline items to TOCEntry[] with proper parentId hierarchy.
+ * Outline items arrive in DFS order; we build parent-child relationships
+ * by tracking the nesting stack.
+ */
+function buildEntriesFromOutline(
+  items: PDFOutlineItem[],
+  bookId: string,
+  totalPages: number,
+  pageOffset: number,
+): TOCEntry[] {
+  const entries: TOCEntry[] = [];
+
+  // Stack of (entryId, level) for tracking nesting
+  const stack: Array<{ id: string; level: number }> = [];
+  let counter = 0;
+
+  for (const item of items) {
+    // Convert document page → book page
+    const bookPage = Math.max(1, Math.min(item.page - pageOffset, totalPages));
+
+    const id = `${bookId}_toc_outline_${counter++}`;
+    const level = Math.max(1, Math.min(item.level, 3));
+
+    // Find parent: pop stack until we find an entry with a lower level
+    while (stack.length > 0 && stack[stack.length - 1].level >= level) {
+      stack.pop();
+    }
+    const parentId = stack.length > 0 ? stack[stack.length - 1].id : undefined;
+
+    entries.push({
+      id,
+      title: item.title.trim(),
+      page: bookPage,
+      level,
+      parentId,
+    });
+
+    // Push current entry onto stack (only if it has children or could be a parent)
+    if (item.childCount > 0 || level < 3) {
+      stack.push({ id, level });
+    }
+  }
+
+  // Validate: remove entries with invalid parentId
+  const validIds = new Set(entries.map(e => e.id));
+  for (const entry of entries) {
+    if (entry.parentId && !validIds.has(entry.parentId)) {
+      entry.parentId = undefined;
+    }
+  }
+
+  return entries;
 }
 
 // ============================================================

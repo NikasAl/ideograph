@@ -122,6 +122,103 @@ async function extractTextFromPDFPageFromDoc(
   return { text, hasTextLayer };
 }
 
+// ============================================================
+// PDF Outline (Bookmarks) extraction
+// ============================================================
+
+/** A single outline item extracted from PDF bookmarks */
+export interface PDFOutlineItem {
+  title: string;
+  page: number;        // 1-based page number (document numbering)
+  level: number;       // 1-based nesting level (clamped to 1-3)
+  childCount: number;  // number of direct children
+}
+
+/**
+ * Extract the PDF's built-in outline (bookmarks) as a flat list.
+ * Uses pdfjsLib.getOutline() to read the document's table-of-contents
+ * structure embedded by the author/publisher.
+ *
+ * Returns null if the PDF has no outline at all.
+ */
+export async function extractPDFOutline(pdfData: ArrayBuffer): Promise<PDFOutlineItem[] | null> {
+  const pdf = await pdfjsLib.getDocument({ data: copyData(pdfData) }).promise;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const outline = await pdf.getOutline() as any[] | null;
+
+  if (!outline || outline.length === 0) return null;
+
+  const items: PDFOutlineItem[] = [];
+  await collectOutlineItems(pdf, outline, items, 1);
+  return items;
+}
+
+/**
+ * Recursively collect outline items, resolving page destinations.
+ * Clamps level to max 3 to match TOCEntry schema.
+ */
+async function collectOutlineItems(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdf: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nodes: any[],
+  items: PDFOutlineItem[],
+  level: number,
+): Promise<void> {
+  if (level > 3) return; // max 3 levels in our schema
+
+  for (const node of nodes) {
+    const title = (node.title || '').trim();
+    if (!title) continue;
+
+    // Resolve page number from destination
+    const page = await resolveOutlinePage(pdf, node.dest);
+    const childCount = (node.items && Array.isArray(node.items)) ? node.items.length : 0;
+
+    if (page > 0) {
+      items.push({ title, page, level, childCount });
+    }
+
+    // Recurse into children at level + 1
+    if (node.items && Array.isArray(node.items) && node.items.length > 0) {
+      await collectOutlineItems(pdf, node.items, items, level + 1);
+    }
+  }
+}
+
+/**
+ * Resolve the page number from an outline item's destination.
+ * dest can be a string (named dest) or an array [pageRef, ...].
+ */
+async function resolveOutlinePage(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdf: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dest: any,
+): Promise<number> {
+  try {
+    let pageRef;
+
+    if (typeof dest === 'string') {
+      // Named destination — resolve to explicit dest array
+      const resolved = await pdf.getDestination(dest);
+      if (!resolved || resolved.length === 0) return 0;
+      pageRef = resolved[0];
+    } else if (Array.isArray(dest) && dest.length > 0) {
+      pageRef = dest[0];
+    } else {
+      return 0;
+    }
+
+    if (!pageRef) return 0;
+
+    const pageIdx = await pdf.getPageIndex(pageRef);
+    return pageIdx + 1; // 1-based
+  } catch {
+    return 0; // unresolvable destination
+  }
+}
+
 /**
  * Convert Blob to data:image/png;base64,... string.
  * Uses ArrayBuffer + btoa — works in service worker context (no FileReader needed).

@@ -6,7 +6,7 @@ import { db } from '../../db/index.js';
 import type { TOCEntry, Book } from '../../db/schema.js';
 import { getSettings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
-import { extractTOC, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
+import { extractTOC, extractTOCFromOutline, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
 import { ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 import { openInZathura } from '../utils/native-messaging.js';
 import '../../ui/styles/components/toc-panel.css';
@@ -17,6 +17,7 @@ export class TOCPanel {
   private book: Book | null = null;
   private toc: TOCEntry[] = [];
   private isExtracting = false;
+  private isExtractingOutline = false;
   private editingEntryId: string | null = null;
   private collapsedIds: Set<string> = new Set();
 
@@ -100,6 +101,9 @@ export class TOCPanel {
           <input type="number" class="toc-page-input" id="toc-from" value="${!hasTOC ? 1 : ''}" min="1" max="${book.totalPages}" placeholder="от">
           <span class="toc-page-separator">—</span>
           <input type="number" class="toc-page-input" id="toc-to" value="${!hasTOC ? 5 : ''}" min="1" max="${book.totalPages}" placeholder="до">
+          <button class="secondary-btn" id="toc-outline-btn" ${this.isExtractingOutline ? 'disabled' : ''} title="Извлечь из встроенных bookmarks PDF (без LLM)">
+            ${this.isExtractingOutline ? '... Читаем...' : 'Из bookmarks'}
+          </button>
           <button class="primary-btn" id="toc-extract-btn" ${this.isExtracting ? 'disabled' : ''}>
             ${this.isExtracting ? '... Распознаём...' : 'Распознать'}
           </button>
@@ -303,7 +307,10 @@ export class TOCPanel {
   // ---- Event binding ----
 
   private bindEvents(): void {
-    // Extract TOC button
+    // Extract from PDF bookmarks (no LLM)
+    this.container.querySelector('#toc-outline-btn')?.addEventListener('click', () => this.handleExtractOutline());
+
+    // Extract TOC button (LLM)
     this.container.querySelector('#toc-extract-btn')?.addEventListener('click', () => this.handleExtract());
 
     // Summarize all
@@ -381,7 +388,64 @@ export class TOCPanel {
     if (el) el.focus();
   }
 
-  // ---- Handlers ----
+  // ---- Outline extraction (no LLM) ----
+
+  private async handleExtractOutline(): Promise<void> {
+    if (this.isExtractingOutline) return;
+    const book = this.book!;
+
+    this.isExtractingOutline = true;
+    this.hideError();
+
+    const outlineBtn = this.container.querySelector('#toc-outline-btn') as HTMLButtonElement;
+    if (outlineBtn) {
+      outlineBtn.disabled = true;
+      outlineBtn.textContent = '... Читаем';
+    }
+    this.updateProgress('Подготовка...', 5);
+
+    try {
+      const access = await ensureFileAccess(this.bookId);
+      if (access === null) {
+        const handle = await reconnectFileHandleWithCheck(this.bookId, book.filePath);
+        if (!handle) {
+          this.showError('Не выбран файл. Нажмите «⟷ Подключить файл» в списке книг.');
+          return;
+        }
+      } else if (access === 'denied') {
+        this.showError('Доступ к файлу запрещён. Подключите файл заново.');
+        return;
+      }
+
+      const pdfData = await readFileAsArrayBuffer(this.bookId);
+
+      const entries = await extractTOCFromOutline({
+        bookId: this.bookId,
+        pdfData,
+        onProgress: (msg, pct) => this.updateProgress(msg, pct),
+      });
+
+      if (!entries) {
+        this.showError('В PDF нет встроенного оглавления (bookmarks). Попробуйте распознать через LLM.');
+        return;
+      }
+
+      this.toc = entries;
+      await this.render();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.showError(`Ошибка: ${msg}`);
+    } finally {
+      this.isExtractingOutline = false;
+      const btn = this.container.querySelector('#toc-outline-btn') as HTMLButtonElement;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Из bookmarks';
+      }
+    }
+  }
+
+  // ---- LLM extraction handlers ----
 
   private async handleExtract(): Promise<void> {
     if (this.isExtracting) return;
