@@ -55,14 +55,14 @@ class App {
           <button class="nav-btn ${this.currentView === 'library' ? 'active' : ''}" data-view="library">
             ≡ Библиотека
           </button>
+          <button class="nav-btn ${this.currentView === 'toc' ? 'active' : ''}" data-view="toc" ${!this.selectedBookId ? 'disabled' : ''}>
+            ≡ Оглавление
+          </button>
           <button class="nav-btn ${this.currentView === 'ideas' ? 'active' : ''}" data-view="ideas" ${!this.selectedBookId ? 'disabled' : ''}>
             ✦ Идеи
           </button>
           <button class="nav-btn ${this.currentView === 'graph' ? 'active' : ''}" data-view="graph" ${!this.selectedBookId ? 'disabled' : ''}>
             ~ Граф
-          </button>
-          <button class="nav-btn ${this.currentView === 'toc' ? 'active' : ''}" data-view="toc" ${!this.selectedBookId ? 'disabled' : ''}>
-            ≡ Оглавление
           </button>
         </nav>
         <div class="app-actions">
