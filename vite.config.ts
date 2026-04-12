@@ -12,6 +12,8 @@ export default defineConfig({
       '@db': resolve(__dirname, 'src/db'),
       '@ui': resolve(__dirname, 'src/ui'),
       '@ext': resolve(__dirname, 'src/extraction'),
+      // djvujs-dist has no main/exports — point directly to library source
+      'djvujs-dist/library/src/index.js': resolve(__dirname, 'node_modules/djvujs-dist/library/src/index.js'),
     },
   },
   build: {
