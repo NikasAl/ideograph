@@ -50,6 +50,7 @@ export interface Book {
   format: BookFormat;
   extractionMode: ExtractionMode;
   filePath?: string;
+  pageOffset: number;           // shift: book page N → document page N + pageOffset
   tableOfContents: TOCEntry[];
   lastAnalyzedPage: number;
   createdAt: number;

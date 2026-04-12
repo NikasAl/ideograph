@@ -119,6 +119,32 @@
   border-radius: 6px;
   color: #ef4444;
   font-size: 0.85rem;
+  display: none;
+}
+
+/* ---- Page Offset ---- */
+
+.toc-offset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.toc-offset-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.toc-offset-input {
+  width: 60px;
+}
+
+.toc-doc-page {
+  color: var(--accent-color);
+  font-family: monospace;
+  font-size: 0.75rem;
 }
 
 /* ---- TOC Tree ---- */
@@ -264,6 +290,21 @@
   background: var(--bg-secondary);
   color: var(--text-primary);
   border-color: var(--text-secondary);
+}
+
+.toc-btn-sm.btn-zathura {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.toc-btn-sm.btn-zathura:hover {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.toc-btn-sm.btn-zathura-loading {
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .toc-btn-sm.btn-analyze {

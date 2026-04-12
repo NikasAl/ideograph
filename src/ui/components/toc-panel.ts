@@ -8,11 +8,13 @@ import { getSettings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
 import { extractTOC, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
 import { ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
+import { openInZathura } from '../utils/native-messaging.js';
 import '../../ui/styles/components/toc-panel.css';
 
 export class TOCPanel {
   private container: HTMLElement;
   private bookId: string;
+  private book: Book | null = null;
   private toc: TOCEntry[] = [];
   private isExtracting = false;
   private editingEntryId: string | null = null;
@@ -23,27 +25,27 @@ export class TOCPanel {
   }
 
   async render(): Promise<void> {
-    const book = await db.books.get(this.bookId);
-    if (!book) {
+    this.book = (await db.books.get(this.bookId)) ?? null;
+    if (!this.book) {
       this.container.innerHTML = '<div class="empty-state"><p>Книга не найдена</p></div>';
       return;
     }
-    this.toc = book.tableOfContents || [];
+    this.toc = this.book.tableOfContents || [];
 
     this.container.innerHTML = `
       <div class="toc-panel">
-        ${this.renderHeader()}
-        ${this.renderInputSection(book)}
-        ${this.renderTree(book)}
+        ${this.buildHeaderHtml()}
+        ${this.buildInputSectionHtml()}
+        ${this.buildTreeHtml()}
       </div>
     `;
 
-    this.bindEvents(book);
+    this.bindEvents();
   }
 
-  // ---- Render sections ----
+  // ---- Build HTML sections (used in initial render) ----
 
-  private renderHeader(): string {
+  private buildHeaderHtml(): string {
     const chapters = this.toc.filter(e => e.level === 1);
     return `
       <div class="toc-header">
@@ -53,7 +55,7 @@ export class TOCPanel {
         </div>
         <div class="toc-header-actions">
           ${this.toc.length > 0 ? `
-            <button class="secondary-btn" id="toc-summarize-all">📋 Суммаризировать главы</button>
+            <button class="secondary-btn" id="toc-summarize-all">📋 Суммаризировать</button>
             <button class="secondary-btn" id="toc-clear">🗑️ Очистить</button>
           ` : ''}
         </div>
@@ -61,8 +63,10 @@ export class TOCPanel {
     `;
   }
 
-  private renderInputSection(book: Book): string {
+  private buildInputSectionHtml(): string {
+    const book = this.book!;
     const hasTOC = this.toc.length > 0;
+    const offset = book.pageOffset || 0;
     return `
       <div class="toc-input-section" id="toc-input-section">
         ${!hasTOC ? '<p style="margin:0 0 12px;color:var(--text-secondary);font-size:0.9rem;">Укажите страницы, где напечатано оглавление книги:</p>' : ''}
@@ -72,22 +76,30 @@ export class TOCPanel {
           <span class="toc-page-separator">—</span>
           <input type="number" class="toc-page-input" id="toc-to" value="${!hasTOC ? 5 : ''}" min="1" max="${book.totalPages}" placeholder="до">
           <button class="primary-btn" id="toc-extract-btn" ${this.isExtracting ? 'disabled' : ''}>
-            ${this.isExtracting ? '⏳ Распознаём...' : '🔍 Распознать оглавление'}
+            ${this.isExtracting ? '⏳ Распознаём...' : '🔍 Распознать'}
           </button>
         </div>
-        <div class="toc-progress" id="toc-progress" style="display:none;">
+        ${hasTOC ? `
+        <div class="toc-offset-row">
+          <label class="toc-offset-label">Сдвиг страниц (книга→PDF):</label>
+          <input type="number" class="toc-page-input toc-offset-input" id="toc-offset" value="${offset}" title="Если страница в книге N открывается в PDF на странице M, сдвиг = M - N">
+          <button class="secondary-btn" id="toc-apply-offset">Применить</button>
+          <button class="secondary-btn" id="toc-calibrate-offset" title="По одной известной странице вычислить сдвиг">📐 Калибровать</button>
+        </div>
+        ` : ''}
+        <div class="toc-progress" id="toc-progress">
           <div class="toc-progress-bar"><div class="toc-progress-fill" id="toc-progress-fill"></div></div>
           <div class="toc-progress-text" id="toc-progress-text"></div>
         </div>
-        <div class="toc-error" id="toc-error" style="display:none;"></div>
+        <div class="toc-error" id="toc-error"></div>
       </div>
     `;
   }
 
-  private renderTree(book: Book): string {
+  private buildTreeHtml(): string {
     if (this.toc.length === 0) {
       return `
-        <div class="toc-tree-container">
+        <div class="toc-tree-container" id="toc-tree">
           <div class="toc-empty">
             <div class="toc-empty-icon">📑</div>
             <p class="toc-empty-hint">
@@ -101,17 +113,22 @@ export class TOCPanel {
 
     return `
       <div class="toc-tree-container" id="toc-tree">
-        ${this.toc.map(entry => this.renderEntry(entry, book)).join('')}
+        ${this.toc.map(entry => this.buildEntryHtml(entry)).join('')}
       </div>
-      <div class="toc-add-section">
+      <div class="toc-add-section" id="toc-add-section">
         <button class="toc-add-btn" id="toc-add-entry">+ Добавить раздел</button>
       </div>
     `;
   }
 
-  private renderEntry(entry: TOCEntry, book: Book): string {
+  private buildEntryHtml(entry: TOCEntry): string {
+    const book = this.book!;
     const isEditing = this.editingEntryId === entry.id;
+    const offset = book.pageOffset || 0;
+    const docPage = entry.page + offset;
+    const docPageEnd = entry.pageEnd ? entry.pageEnd + offset : docPage;
     const pageStr = entry.pageEnd ? `${entry.page}–${entry.pageEnd}` : `${entry.page}`;
+    const docPageStr = entry.pageEnd ? `${docPage}–${docPageEnd}` : `${docPage}`;
     const pageCount = entry.pageEnd ? entry.pageEnd - entry.page + 1 : 1;
     const indent = entry.level > 1 ? '│   '.repeat(entry.level - 1) : '';
     const connector = entry.level > 1 ? '├──' : '';
@@ -147,7 +164,8 @@ export class TOCPanel {
         <div class="toc-entry-content">
           <div class="toc-entry-title">${this.escapeHtml(entry.title)}</div>
           <div class="toc-entry-meta">
-            <span class="toc-page-range">стр. ${pageStr}</span>
+            <span class="toc-page-range" title="Номера в книге">${pageStr}</span>
+            ${offset !== 0 ? `<span class="toc-doc-page" title="Номера в PDF">PDF ${docPageStr}</span>` : ''}
             <span>${pageCount} стр.</span>
             ${entry.level === 1 ? `
               <span class="toc-ideas-badge ${!entry.ideasCount ? 'empty' : ''}">
@@ -158,6 +176,7 @@ export class TOCPanel {
           ${entry.summary ? `<div class="toc-summary">${this.escapeHtml(entry.summary)}</div>` : ''}
         </div>
         <div class="toc-entry-actions">
+          <button class="toc-btn-sm btn-zathura" data-page="${docPage}" title="Открыть в zathura на стр. ${docPage}">📖</button>
           ${entry.level === 1 ? `
             <button class="toc-btn-sm btn-analyze" data-analyze-id="${entry.id}" title="Анализировать главу">▶ Анализ</button>
           ` : ''}
@@ -168,82 +187,121 @@ export class TOCPanel {
     `;
   }
 
+  // ---- Refresh tree DOM without full re-render ----
+
+  private refreshTree(): void {
+    const treeEl = this.container.querySelector('#toc-tree');
+    const addEl = this.container.querySelector('#toc-add-section');
+    const book = this.book!;
+
+    if (treeEl) {
+      treeEl.innerHTML = this.toc.length === 0
+        ? `<div class="toc-empty">
+            <div class="toc-empty-icon">📑</div>
+            <p class="toc-empty-hint">Оглавление пусто.</p>
+          </div>`
+        : this.toc.map(entry => this.buildEntryHtml(entry)).join('');
+    }
+
+    if (addEl) {
+      addEl.innerHTML = '<button class="toc-add-btn" id="toc-add-entry">+ Добавить раздел</button>';
+    }
+
+    // Re-bind tree events
+    this.bindTreeEvents();
+
+    // Update header counts
+    const chapters = this.toc.filter(e => e.level === 1);
+    const countEl = this.container.querySelector('.toc-chapter-count');
+    if (countEl) {
+      countEl.textContent = `${chapters.length} глав`;
+      if (this.toc.length === 0) countEl.remove();
+    }
+  }
+
   // ---- Event binding ----
 
-  private bindEvents(book: Book): void {
+  private bindEvents(): void {
     // Extract TOC button
-    const extractBtn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
-    if (extractBtn) {
-      extractBtn.addEventListener('click', () => this.handleExtract(book));
-    }
+    this.container.querySelector('#toc-extract-btn')?.addEventListener('click', () => this.handleExtract());
 
     // Summarize all
-    const summarizeBtn = this.container.querySelector('#toc-summarize-all') as HTMLButtonElement;
-    if (summarizeBtn) {
-      summarizeBtn.addEventListener('click', () => this.handleSummarizeAll(book));
-    }
+    this.container.querySelector('#toc-summarize-all')?.addEventListener('click', () => this.handleSummarizeAll());
 
     // Clear TOC
-    const clearBtn = this.container.querySelector('#toc-clear') as HTMLButtonElement;
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => this.handleClear());
-    }
+    this.container.querySelector('#toc-clear')?.addEventListener('click', () => this.handleClear());
 
     // Add entry
-    const addBtn = this.container.querySelector('#toc-add-entry') as HTMLButtonElement;
-    if (addBtn) {
-      addBtn.addEventListener('click', () => this.handleAddEntry(book));
-    }
+    this.container.querySelector('#toc-add-entry')?.addEventListener('click', () => this.handleAddEntry());
 
-    // Tree actions (delegation)
-    const tree = this.container.querySelector('#toc-tree');
-    if (tree) {
-      tree.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement;
+    // Page offset
+    this.container.querySelector('#toc-apply-offset')?.addEventListener('click', () => this.handleApplyOffset());
+    this.container.querySelector('#toc-calibrate-offset')?.addEventListener('click', () => this.handleCalibrateOffset());
 
-        const analyzeBtn = target.closest('[data-analyze-id]') as HTMLElement;
-        const editBtn = target.closest('[data-edit-id]') as HTMLElement;
-        const deleteBtn = target.closest('[data-delete-id]') as HTMLElement;
-        const saveBtn = target.closest('[data-save-id]') as HTMLElement;
-        const cancelBtn = target.closest('[data-cancel-id]') as HTMLElement;
+    // Tree events
+    this.bindTreeEvents();
 
-        if (analyzeBtn) {
-          const entryId = analyzeBtn.dataset.analyzeId!;
-          this.handleAnalyzeChapter(entryId, book);
-        } else if (editBtn) {
-          this.editingEntryId = editBtn.dataset.editId!;
-          this.renderTree(book);
-          // Re-select after re-render
-          const editTitle = this.container.querySelector(`#edit-title-${this.editingEntryId}`) as HTMLInputElement;
-          if (editTitle) editTitle.focus();
-        } else if (deleteBtn) {
-          const entryId = deleteBtn.dataset.deleteId!;
-          this.handleDeleteEntry(entryId, book);
-        } else if (saveBtn) {
-          const entryId = saveBtn.dataset.saveId!;
-          this.handleSaveEntry(entryId, book);
-        } else if (cancelBtn) {
-          this.editingEntryId = null;
-          this.renderTree(book);
-        }
-      });
-    }
-
-    // Enter key in edit inputs
+    // Enter/Escape in edit inputs
     this.container.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && this.editingEntryId) {
-        this.handleSaveEntry(this.editingEntryId, book);
+        this.handleSaveEntry(this.editingEntryId);
       } else if (e.key === 'Escape' && this.editingEntryId) {
         this.editingEntryId = null;
-        this.renderTree(book);
+        this.refreshTree();
       }
     });
   }
 
+  private bindTreeEvents(): void {
+    const tree = this.container.querySelector('#toc-tree');
+    if (!tree) return;
+
+    // Remove old listener by cloning (event delegation via a single handler)
+    const newTree = tree.cloneNode(true) as HTMLElement;
+    tree.parentNode?.replaceChild(newTree, tree);
+
+    newTree.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+
+      const zathuraBtn = target.closest('.btn-zathura') as HTMLElement;
+      const analyzeBtn = target.closest('[data-analyze-id]') as HTMLElement;
+      const editBtn = target.closest('[data-edit-id]') as HTMLElement;
+      const deleteBtn = target.closest('[data-delete-id]') as HTMLElement;
+      const saveBtn = target.closest('[data-save-id]') as HTMLElement;
+      const cancelBtn = target.closest('[data-cancel-id]') as HTMLElement;
+
+      if (zathuraBtn) {
+        this.handleOpenZathura(zathuraBtn);
+      } else if (analyzeBtn) {
+        this.handleAnalyzeChapter(analyzeBtn.dataset.analyzeId!);
+      } else if (editBtn) {
+        this.editingEntryId = editBtn.dataset.editId!;
+        this.refreshTree();
+        this.focusEditInput(this.editingEntryId);
+      } else if (deleteBtn) {
+        this.handleDeleteEntry(deleteBtn.dataset.deleteId!);
+      } else if (saveBtn) {
+        this.handleSaveEntry(saveBtn.dataset.saveId!);
+      } else if (cancelBtn) {
+        this.editingEntryId = null;
+        this.refreshTree();
+      }
+    });
+
+    // Add entry button (in case tree was refreshed)
+    this.container.querySelector('#toc-add-entry')?.addEventListener('click', () => this.handleAddEntry());
+  }
+
+  private focusEditInput(entryId: string): void {
+    const el = this.container.querySelector(`#edit-title-${entryId}`) as HTMLInputElement;
+    if (el) el.focus();
+  }
+
   // ---- Handlers ----
 
-  private async handleExtract(book: Book): Promise<void> {
+  private async handleExtract(): Promise<void> {
     if (this.isExtracting) return;
+    const book = this.book!;
 
     const fromInput = this.container.querySelector('#toc-from') as HTMLInputElement;
     const toInput = this.container.querySelector('#toc-to') as HTMLInputElement;
@@ -258,7 +316,7 @@ export class TOCPanel {
     this.isExtracting = true;
     this.hideError();
 
-    // Immediately update button and progress in DOM (no full re-render)
+    // Immediately update button in DOM
     const extractBtn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
     if (extractBtn) {
       extractBtn.disabled = true;
@@ -275,7 +333,6 @@ export class TOCPanel {
       }
       const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
 
-      // Read PDF file data (same pattern as analysis-panel)
       const access = await ensureFileAccess(this.bookId);
       if (access === null) {
         const handle = await reconnectFileHandleWithCheck(this.bookId, book.filePath);
@@ -311,23 +368,19 @@ export class TOCPanel {
       this.showError(`Ошибка: ${msg}`);
     } finally {
       this.isExtracting = false;
-      // Restore button state without full re-render
       const btn = this.container.querySelector('#toc-extract-btn') as HTMLButtonElement;
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '🔍 Распознать оглавление';
+        btn.textContent = '🔍 Распознать';
       }
     }
   }
 
-  private async handleSummarizeAll(book: Book): Promise<void> {
+  private async handleSummarizeAll(): Promise<void> {
     try {
       const settings = await getSettings();
       const apiKey = settings.providerKeys[settings.activeProvider];
-      if (!apiKey) {
-        this.showError('API ключ не настроен');
-        return;
-      }
+      if (!apiKey) { this.showError('API ключ не настроен'); return; }
       const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
 
       await summarizeTOCChapters({
@@ -339,15 +392,15 @@ export class TOCPanel {
         onProgress: (msg, pct) => this.updateProgress(msg, pct),
       });
 
-      // Reload TOC
       const updatedBook = await db.books.get(this.bookId);
       if (updatedBook) {
+        this.book = updatedBook;
         this.toc = updatedBook.tableOfContents || [];
         await this.render();
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.showError(`Ошибка суммаризации: ${msg}`);
+      this.showError(`Ошибка: ${msg}`);
     }
   }
 
@@ -358,7 +411,8 @@ export class TOCPanel {
     await this.render();
   }
 
-  private async handleAddEntry(book: Book): Promise<void> {
+  private async handleAddEntry(): Promise<void> {
+    const book = this.book!;
     const newEntry: TOCEntry = {
       id: `${this.bookId}_toc_${Date.now()}`,
       title: 'Новый раздел',
@@ -369,19 +423,17 @@ export class TOCPanel {
     computePageRanges(this.toc, book.totalPages);
     await db.books.update(this.bookId, { tableOfContents: this.toc, updatedAt: Date.now() });
     this.editingEntryId = newEntry.id;
-    this.renderTree(book);
-    const editTitle = this.container.querySelector(`#edit-title-${newEntry.id}`) as HTMLInputElement;
-    if (editTitle) {
-      editTitle.focus();
-      editTitle.select();
-    }
+    this.refreshTree();
+    this.focusEditInput(newEntry.id);
+    // Select title text
+    const el = this.container.querySelector(`#edit-title-${newEntry.id}`) as HTMLInputElement;
+    if (el) el.select();
   }
 
-  private async handleAnalyzeChapter(entryId: string, book: Book): Promise<void> {
+  private async handleAnalyzeChapter(entryId: string): Promise<void> {
     const entry = this.toc.find(e => e.id === entryId);
     if (!entry || !entry.pageEnd) return;
 
-    // Fire a custom event that the analysis panel can listen to
     document.dispatchEvent(new CustomEvent('analyze-chapter', {
       detail: {
         bookId: this.bookId,
@@ -392,17 +444,13 @@ export class TOCPanel {
     }));
   }
 
-  private async handleDeleteEntry(entryId: string, book: Book): Promise<void> {
-    // Remove entry and all children
+  private async handleDeleteEntry(entryId: string): Promise<void> {
+    const book = this.book!;
     const toRemove = new Set<string>();
     toRemove.add(entryId);
-    // Find children recursively
     const findChildren = (parentId: string) => {
       for (const e of this.toc) {
-        if (e.parentId === parentId) {
-          toRemove.add(e.id);
-          findChildren(e.id);
-        }
+        if (e.parentId === parentId) { toRemove.add(e.id); findChildren(e.id); }
       }
     };
     findChildren(entryId);
@@ -410,10 +458,11 @@ export class TOCPanel {
     this.toc = this.toc.filter(e => !toRemove.has(e.id));
     computePageRanges(this.toc, book.totalPages);
     await db.books.update(this.bookId, { tableOfContents: this.toc, updatedAt: Date.now() });
-    await this.render();
+    this.refreshTree();
   }
 
-  private async handleSaveEntry(entryId: string, book: Book): Promise<void> {
+  private async handleSaveEntry(entryId: string): Promise<void> {
+    const book = this.book!;
     const titleInput = this.container.querySelector(`#edit-title-${entryId}`) as HTMLInputElement;
     const pageInput = this.container.querySelector(`#edit-page-${entryId}`) as HTMLInputElement;
     const levelSelect = this.container.querySelector(`#edit-level-${entryId}`) as HTMLSelectElement;
@@ -427,7 +476,6 @@ export class TOCPanel {
     entry.page = Math.max(1, Math.min(parseInt(pageInput.value) || 1, book.totalPages));
     entry.level = parseInt(levelSelect.value) || 1;
 
-    // Recompute hierarchy — clear parentId if level changed to 1
     if (entry.level === 1) {
       entry.parentId = undefined;
     }
@@ -435,40 +483,115 @@ export class TOCPanel {
     computePageRanges(this.toc, book.totalPages);
     await db.books.update(this.bookId, { tableOfContents: this.toc, updatedAt: Date.now() });
     this.editingEntryId = null;
-    this.renderTree(book);
+    this.refreshTree();
+  }
+
+  // ---- Zathura ----
+
+  private async handleOpenZathura(btn: HTMLElement): Promise<void> {
+    const book = this.book!;
+    if (!book.filePath) return;
+
+    const page = parseInt(btn.dataset.page || '1', 10);
+    const original = btn.textContent;
+    btn.textContent = '⏳';
+    btn.classList.add('btn-zathura-loading');
+
+    try {
+      const result = await openInZathura(book.filePath, page);
+      if (result.launched) {
+        btn.textContent = '✅';
+      } else {
+        btn.textContent = '📋';
+      }
+    } catch {
+      btn.textContent = '❌';
+    }
+
+    btn.classList.remove('btn-zathura-loading');
+    setTimeout(() => { btn.textContent = original; }, 2000);
+  }
+
+  // ---- Page Offset ----
+
+  private async handleApplyOffset(): Promise<void> {
+    const book = this.book!;
+    const offsetInput = this.container.querySelector('#toc-offset') as HTMLInputElement;
+    if (!offsetInput) return;
+
+    const offset = parseInt(offsetInput.value) || 0;
+    await db.books.update(this.bookId, { pageOffset: offset, updatedAt: Date.now() });
+    book.pageOffset = offset;
+
+    // Refresh tree to show updated document pages
+    this.refreshTree();
+  }
+
+  private async handleCalibrateOffset(): Promise<void> {
+    const book = this.book!;
+    if (this.toc.length === 0) return;
+
+    // Pick first level-1 entry as the reference
+    const refEntry = this.toc.find(e => e.level === 1);
+    if (!refEntry) return;
+
+    const bookPage = refEntry.page;
+    const docPageStr = prompt(
+      `Калибровка сдвига страниц\n\n` +
+      `Раздел «${refEntry.title}» в книге: страница ${bookPage}\n` +
+      `Откройте эту страницу в zathura и введите фактический номер страницы в PDF:\n\n` +
+      `Если PDF совпадает с книгой — введите ${bookPage} (сдвиг = 0)`,
+      String(bookPage),
+    );
+
+    if (docPageStr === null) return; // cancelled
+
+    const docPage = parseInt(docPageStr);
+    if (isNaN(docPage) || docPage < 1) {
+      this.showError('Некорректный номер страницы');
+      return;
+    }
+
+    const offset = docPage - bookPage;
+    await db.books.update(this.bookId, { pageOffset: offset, updatedAt: Date.now() });
+    book.pageOffset = offset;
+
+    // Update the offset input
+    const offsetInput = this.container.querySelector('#toc-offset') as HTMLInputElement;
+    if (offsetInput) offsetInput.value = String(offset);
+
+    // Refresh tree to show updated document pages
+    this.refreshTree();
   }
 
   // ---- UI helpers ----
 
   private updateProgress(msg: string, pct: number): void {
-    const progress = this.container.querySelector('#toc-progress');
+    const progress = this.container.querySelector('#toc-progress') as HTMLElement;
     const fill = this.container.querySelector('#toc-progress-fill') as HTMLElement;
-    const text = this.container.querySelector('#toc-progress-text');
+    const text = this.container.querySelector('#toc-progress-text') as HTMLElement;
 
     if (progress && fill && text) {
-      progress.setAttribute('style', 'display:block;');
+      progress.style.display = 'block';
       fill.style.width = `${pct}%`;
       text.textContent = msg;
     }
   }
 
   private showError(msg: string): void {
-    const errEl = this.container.querySelector('#toc-error');
+    const errEl = this.container.querySelector('#toc-error') as HTMLElement;
     if (errEl) {
       errEl.textContent = msg;
-      errEl.setAttribute('style', 'display:block;');
+      errEl.style.display = 'block';
     }
   }
 
   private hideError(): void {
-    const errEl = this.container.querySelector('#toc-error');
-    if (errEl) {
-      errEl.setAttribute('style', 'display:none;');
-    }
-    const progress = this.container.querySelector('#toc-progress');
-    if (progress) {
-      progress.setAttribute('style', 'display:none;');
-    }
+    const errEl = this.container.querySelector('#toc-error') as HTMLElement;
+    if (errEl) errEl.style.display = 'none';
+
+    const progress = this.container.querySelector('#toc-progress') as HTMLElement;
+    if (progress) progress.style.display = 'none';
   }
 
   private escapeHtml(str: string): string {

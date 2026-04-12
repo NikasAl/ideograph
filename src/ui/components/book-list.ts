@@ -188,6 +188,7 @@ export class BookListView {
         format: format as 'pdf' | 'djvu',
         extractionMode,
         filePath: file.name,
+        pageOffset: 0,
         tableOfContents: [],
         lastAnalyzedPage: 0,
         createdAt: Date.now(),
