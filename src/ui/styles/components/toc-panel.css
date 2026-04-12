@@ -192,6 +192,10 @@
   background: var(--bg-hover);
 }
 
+.toc-tree-node {
+  /* Container for a parent entry + its children */
+}
+
 .toc-entry.level-1 {
   font-weight: 600;
   font-size: 1rem;
@@ -212,12 +216,39 @@
   padding-left: 56px;
 }
 
-.toc-tree-line {
+/* Collapse toggle button */
+.toc-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
   color: var(--text-secondary);
-  opacity: 0.4;
-  user-select: none;
+  cursor: pointer;
   flex-shrink: 0;
-  padding-top: 2px;
+  border-radius: 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+  margin-right: 4px;
+  margin-top: 2px;
+  user-select: none;
+}
+
+.toc-collapse-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Collapsible children container */
+.toc-children {
+  overflow: hidden;
+  max-height: 5000px;
+  transition: max-height 0.3s ease;
+}
+
+.toc-children.collapsed {
+  max-height: 0;
+  pointer-events: none;
 }
 
 .toc-entry-content {

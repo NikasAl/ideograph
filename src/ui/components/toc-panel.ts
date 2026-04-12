@@ -18,6 +18,30 @@ export class TOCPanel {
   private toc: TOCEntry[] = [];
   private isExtracting = false;
   private editingEntryId: string | null = null;
+  private collapsedIds: Set<string> = new Set();
+
+  private static STORAGE_KEY(bookId: string) { return `toc-collapsed-${bookId}`; }
+
+  private loadCollapsedState(): void {
+    try {
+      const raw = localStorage.getItem(TOCPanel.STORAGE_KEY(this.bookId));
+      if (raw) this.collapsedIds = new Set(JSON.parse(raw));
+      else this.collapsedIds = new Set();
+    } catch { this.collapsedIds = new Set(); }
+  }
+
+  private saveCollapsedState(): void {
+    try {
+      localStorage.setItem(TOCPanel.STORAGE_KEY(this.bookId), JSON.stringify([...this.collapsedIds]));
+    } catch { /* ignore */ }
+  }
+
+  private toggleCollapse(entryId: string): void {
+    if (this.collapsedIds.has(entryId)) this.collapsedIds.delete(entryId);
+    else this.collapsedIds.add(entryId);
+    this.saveCollapsedState();
+    this.refreshTree();
+  }
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -31,6 +55,7 @@ export class TOCPanel {
       return;
     }
     this.toc = this.book.tableOfContents || [];
+    this.loadCollapsedState();
 
     this.container.innerHTML = `
       <div class="toc-panel">
@@ -96,6 +121,8 @@ export class TOCPanel {
     `;
   }
 
+  // ---- Nested Tree with collapsible sections ----
+
   private buildTreeHtml(): string {
     if (this.toc.length === 0) {
       return `
@@ -111,9 +138,28 @@ export class TOCPanel {
       `;
     }
 
+    // Build children lookup: parentId → entries sorted by page
+    const childrenMap = new Map<string, TOCEntry[]>();
+    const roots: TOCEntry[] = [];
+    for (const entry of this.toc) {
+      if (entry.parentId && childrenMap.has(entry.parentId)) {
+        childrenMap.get(entry.parentId)!.push(entry);
+      } else if (entry.parentId) {
+        childrenMap.set(entry.parentId, [entry]);
+      } else {
+        roots.push(entry);
+      }
+    }
+    for (const arr of childrenMap.values()) {
+      arr.sort((a, b) => a.page - b.page || a.level - b.level);
+    }
+    roots.sort((a, b) => a.page - b.page || a.level - b.level);
+
+    const treeHtml = roots.map(entry => this.buildSubtreeHtml(entry, childrenMap)).join('');
+
     return `
       <div class="toc-tree-container" id="toc-tree">
-        ${this.toc.map(entry => this.buildEntryHtml(entry)).join('')}
+        ${treeHtml}
       </div>
       <div class="toc-add-section" id="toc-add-section">
         <button class="toc-add-btn" id="toc-add-entry">+ Добавить раздел</button>
@@ -121,7 +167,29 @@ export class TOCPanel {
     `;
   }
 
-  private buildEntryHtml(entry: TOCEntry): string {
+  /** Recursively build a subtree with collapsible children */
+  private buildSubtreeHtml(entry: TOCEntry, childrenMap: Map<string, TOCEntry[]>): string {
+    const children = childrenMap.get(entry.id) || [];
+    const hasChildren = children.length > 0;
+    const isCollapsed = hasChildren && this.collapsedIds.has(entry.id);
+    const chevron = hasChildren ? (isCollapsed ? '▸' : '▾') : '';
+
+    let html = '<div class="toc-tree-node">';
+    html += this.buildEntryHtml(entry, hasChildren, isCollapsed, chevron);
+
+    if (hasChildren) {
+      html += `<div class="toc-children${isCollapsed ? ' collapsed' : ''}">`;
+      for (const child of children) {
+        html += this.buildSubtreeHtml(child, childrenMap);
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  private buildEntryHtml(entry: TOCEntry, hasChildren = false, isCollapsed = false, chevron = ''): string {
     const book = this.book!;
     const isEditing = this.editingEntryId === entry.id;
     const offset = book.pageOffset || 0;
@@ -130,13 +198,10 @@ export class TOCPanel {
     const pageStr = entry.pageEnd ? `${entry.page}–${entry.pageEnd}` : `${entry.page}`;
     const docPageStr = entry.pageEnd ? `${docPage}–${docPageEnd}` : `${docPage}`;
     const pageCount = entry.pageEnd ? entry.pageEnd - entry.page + 1 : 1;
-    const indent = entry.level > 1 ? '│   '.repeat(entry.level - 1) : '';
-    const connector = entry.level > 1 ? '├──' : '';
 
     if (isEditing) {
       return `
         <div class="toc-entry level-${entry.level} editing" data-entry-id="${entry.id}">
-          <span class="toc-tree-line">${indent}${connector}</span>
           <div class="toc-entry-content">
             <input type="text" class="toc-edit-input" id="edit-title-${entry.id}" value="${this.escapeHtml(entry.title)}">
             <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
@@ -160,7 +225,7 @@ export class TOCPanel {
 
     return `
       <div class="toc-entry level-${entry.level}" data-entry-id="${entry.id}">
-        <span class="toc-tree-line">${indent}${connector}</span>
+        ${hasChildren ? `<span class="toc-collapse-toggle" data-collapse-id="${entry.id}" title="Свернуть/развернуть">${chevron}</span>` : ''}
         <div class="toc-entry-content">
           <div class="toc-entry-title">${this.escapeHtml(entry.title)}</div>
           <div class="toc-entry-meta">
@@ -196,7 +261,7 @@ export class TOCPanel {
             <div class="toc-empty-icon">≡</div>
             <p class="toc-empty-hint">Оглавление пусто.</p>
           </div>`
-        : this.toc.map(entry => this.buildEntryHtml(entry)).join('');
+        : this.buildNestedTreeHtml();
     }
 
     if (addEl) {
@@ -213,6 +278,26 @@ export class TOCPanel {
       countEl.textContent = `${chapters.length} глав`;
       if (this.toc.length === 0) countEl.remove();
     }
+  }
+
+  /** Build nested tree HTML (reused by refreshTree) */
+  private buildNestedTreeHtml(): string {
+    const childrenMap = new Map<string, TOCEntry[]>();
+    const roots: TOCEntry[] = [];
+    for (const entry of this.toc) {
+      if (entry.parentId && childrenMap.has(entry.parentId)) {
+        childrenMap.get(entry.parentId)!.push(entry);
+      } else if (entry.parentId) {
+        childrenMap.set(entry.parentId, [entry]);
+      } else {
+        roots.push(entry);
+      }
+    }
+    for (const arr of childrenMap.values()) {
+      arr.sort((a, b) => a.page - b.page || a.level - b.level);
+    }
+    roots.sort((a, b) => a.page - b.page || a.level - b.level);
+    return roots.map(entry => this.buildSubtreeHtml(entry, childrenMap)).join('');
   }
 
   // ---- Event binding ----
@@ -259,6 +344,7 @@ export class TOCPanel {
     newTree.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
 
+      const collapseBtn = target.closest('[data-collapse-id]') as HTMLElement;
       const zathuraBtn = target.closest('.btn-zathura') as HTMLElement;
       const analyzeBtn = target.closest('[data-analyze-id]') as HTMLElement;
       const editBtn = target.closest('[data-edit-id]') as HTMLElement;
@@ -266,7 +352,9 @@ export class TOCPanel {
       const saveBtn = target.closest('[data-save-id]') as HTMLElement;
       const cancelBtn = target.closest('[data-cancel-id]') as HTMLElement;
 
-      if (zathuraBtn) {
+      if (collapseBtn) {
+        this.toggleCollapse(collapseBtn.dataset.collapseId!);
+      } else if (zathuraBtn) {
         this.handleOpenZathura(zathuraBtn);
       } else if (analyzeBtn) {
         this.handleAnalyzeChapter(analyzeBtn.dataset.analyzeId!);
