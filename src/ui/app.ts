@@ -8,6 +8,7 @@ import { IdeaListView } from './components/idea-list.js';
 import { IdeaGraphView } from './components/idea-graph.js';
 import { ModelTestView } from './components/model-test.js';
 import { TOCPanel } from './components/toc-panel.js';
+import { AnalysisPanel } from './components/analysis-panel.js';
 import { SettingsModal } from './components/settings-modal.js';
 import { getSettings } from '../db/index.js';
 import { restoreAllHandles } from './utils/file-store.js';
@@ -47,7 +48,7 @@ class App {
     app.innerHTML = `
       <header class="app-header">
         <div class="app-logo">
-          <span class="logo-icon">💡</span>
+          <span class="logo-icon">✦</span>
           <h1 class="logo-text">Идеограф</h1>
         </div>
         <nav class="app-nav">
@@ -55,17 +56,17 @@ class App {
             📚 Библиотека
           </button>
           <button class="nav-btn ${this.currentView === 'ideas' ? 'active' : ''}" data-view="ideas" ${!this.selectedBookId ? 'disabled' : ''}>
-            💡 Идеи
+            ✦ Идеи
           </button>
           <button class="nav-btn ${this.currentView === 'graph' ? 'active' : ''}" data-view="graph" ${!this.selectedBookId ? 'disabled' : ''}>
             🕸️ Граф
           </button>
           <button class="nav-btn ${this.currentView === 'toc' ? 'active' : ''}" data-view="toc" ${!this.selectedBookId ? 'disabled' : ''}>
-            📑 Оглавление
+            ≡ Оглавление
           </button>
         </nav>
         <div class="app-actions">
-          <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">🧪</button>
+          <button class="icon-btn ${this.currentView === 'model-test' ? 'active' : ''}" id="btn-model-test" title="Тест моделей">⚡</button>
           <button class="icon-btn btn-about" id="btn-about" title="О расширении">ℹ️</button>
           <button class="icon-btn" id="btn-settings" title="Настройки">⚙️</button>
         </div>
@@ -73,7 +74,7 @@ class App {
 
       ${this.showAbout ? `
       <div class="about-banner">
-        <span class="about-text">💡 Идеограф — Навигатор по идеям книг</span>
+        <span class="about-text">✦ Идеограф — Навигатор по идеям книг</span>
         <button class="about-close" id="btn-about-close">✕</button>
       </div>
       ` : ''}
@@ -170,6 +171,27 @@ class App {
     document.addEventListener('navigate', ((e: CustomEvent) => {
       this.currentView = e.detail.view as ViewType;
       this.render();
+    }) as EventListener);
+
+    // Analyze chapter from TOC panel — navigate to ideas and open analysis with pre-filled range
+    document.addEventListener('analyze-chapter', ((e: CustomEvent<{
+      bookId: string;
+      pageFrom: number;
+      pageTo: number;
+      chapterTitle: string;
+      chapterId?: string;
+    }>) => {
+      const { bookId, pageFrom, pageTo, chapterTitle, chapterId } = e.detail;
+      this.selectedBookId = bookId;
+      this.currentView = 'ideas';
+      this.render();
+      // After render, open AnalysisPanel with pre-filled page range
+      requestAnimationFrame(() => {
+        const container = document.getElementById('view-container');
+        if (container) {
+          new AnalysisPanel(container, bookId, { pageFrom, pageTo, chapterTitle, chapterId }).render();
+        }
+      });
     }) as EventListener);
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

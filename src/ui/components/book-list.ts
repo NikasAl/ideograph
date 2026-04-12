@@ -42,7 +42,7 @@ export class BookListView {
   private renderEmpty(): string {
     return `
       <div class="empty-state">
-        <div class="empty-icon">📖</div>
+        <div class="empty-icon">∅</div>
         <p>Нет подключённых книг</p>
         <p class="empty-hint">Нажмите «Добавить книгу» чтобы начать</p>
       </div>
@@ -65,17 +65,17 @@ export class BookListView {
         <h3 class="book-title">${this.esc(book.title || 'Без названия')}</h3>
         <p class="book-author">${this.esc(book.author || 'Неизвестный автор')}</p>
         <div class="book-meta">
-          <span>📄 ${book.totalPages} стр.</span>
+          <span>${book.totalPages} стр.</span>
           ${book.tableOfContents && book.tableOfContents.length > 0
-            ? `<span class="toc-badge" title="Оглавление извлечено">📑 ${book.tableOfContents.filter(e => e.level === 1).length} глав</span>`
-            : '<span class="toc-badge toc-empty" title="Оглавление не указано">📑 —</span>'
+            ? `<span class="toc-badge" title="Оглавление извлечено">≡ ${book.tableOfContents.filter(e => e.level === 1).length} глав</span>`
+            : '<span class="toc-badge toc-empty" title="Оглавление не указано">≡ —</span>'
           }
         </div>
         <div class="book-actions">
           <button class="secondary-btn btn-select-book" data-book-id="${book.id}">Открыть идеи</button>
-          <button class="secondary-btn btn-open-toc" data-book-id="${book.id}" title="Оглавление">📑 Оглавление</button>
+          <button class="secondary-btn btn-open-toc" data-book-id="${book.id}" title="Оглавление">≡ Оглавление</button>
           ${isDisconnected ? `<button class="secondary-btn btn-reconnect-book" data-book-id="${book.id}" data-file-name="${this.esc(book.filePath || '')}" title="Выберите PDF/DJVU файл">🔗 Подключить файл</button>` : ''}
-          <button class="icon-btn btn-open-reader" data-book-id="${book.id}" data-page="1" title="Открыть в ридере">📖</button>
+          <button class="icon-btn btn-open-reader" data-book-id="${book.id}" data-page="1" title="Открыть в ридере">↗</button>
           <button class="icon-btn btn-remove-book" data-book-id="${book.id}" title="Удалить">🗑️</button>
         </div>
       </div>

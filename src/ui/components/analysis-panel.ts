@@ -14,24 +14,33 @@ import { createProvider, parseFallbackModels } from '../../background/ai-client.
 import { runPipeline } from '../../extraction/pipeline.js';
 import { getFileHandle, verifyFileHandle, ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 
+export interface AnalysisPanelOptions {
+  pageFrom?: number;
+  pageTo?: number;
+  chapterTitle?: string;
+  chapterId?: string;
+}
+
 export class AnalysisPanel {
   private container: HTMLElement;
   private bookId: string;
   private selectedMode: ExtractionMode = 'text';
   private abortController: AbortController | null = null;
   private pdfData: ArrayBuffer | null = null;
+  private initialOptions: AnalysisPanelOptions;
 
-  constructor(container: HTMLElement, bookId: string) {
+  constructor(container: HTMLElement, bookId: string, options?: AnalysisPanelOptions) {
     this.container = container;
     this.bookId = bookId;
+    this.initialOptions = options || {};
   }
 
   async render(): Promise<void> {
     const book = await db.books.get(this.bookId);
     if (!book) return;
 
-    const defaultFrom = Math.max(1, book.lastAnalyzedPage + 1);
-    const defaultTo = Math.min(book.totalPages, Math.max(1, book.lastAnalyzedPage + 10));
+    const defaultFrom = this.initialOptions.pageFrom ?? Math.max(1, book.lastAnalyzedPage + 1);
+    const defaultTo = this.initialOptions.pageTo ?? Math.min(book.totalPages, Math.max(1, book.lastAnalyzedPage + 10));
 
     // Try to read file for preview
     let previewHtml = '<p class="preview-unavailable">Нет доступа к файлу для предпросмотра</p>';
@@ -127,7 +136,7 @@ export class AnalysisPanel {
     panel.className = 'analysis-panel';
     panel.innerHTML = `
       <div class="analysis-card">
-        <h3>🔍 Анализ идей</h3>
+        <h3>🔍 Анализ идей${this.initialOptions.chapterTitle ? `: ${this.esc(this.initialOptions.chapterTitle)}` : ''}</h3>
         ${previewHtml}
         <div class="mode-selection">
           <h4>Режим экстракции:</h4>

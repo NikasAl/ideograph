@@ -50,7 +50,7 @@ export class TOCPanel {
     return `
       <div class="toc-header">
         <div class="toc-header-left">
-          <h2>📑 Оглавление</h2>
+          <h2>≡ Оглавление</h2>
           ${this.toc.length > 0 ? `<span class="toc-chapter-count">${chapters.length} глав</span>` : ''}
         </div>
         <div class="toc-header-actions">
@@ -101,7 +101,7 @@ export class TOCPanel {
       return `
         <div class="toc-tree-container" id="toc-tree">
           <div class="toc-empty">
-            <div class="toc-empty-icon">📑</div>
+            <div class="toc-empty-icon">≡</div>
             <p class="toc-empty-hint">
               Оглавление ещё не извлечено.<br>
               Укажите диапазон страниц с оглавлением и нажмите «Распознать».
@@ -167,19 +167,15 @@ export class TOCPanel {
             <span class="toc-page-range" title="Номера в книге">${pageStr}</span>
             ${offset !== 0 ? `<span class="toc-doc-page" title="Номера в PDF">PDF ${docPageStr}</span>` : ''}
             <span>${pageCount} стр.</span>
-            ${entry.level === 1 ? `
-              <span class="toc-ideas-badge ${!entry.ideasCount ? 'empty' : ''}">
-                💡${entry.ideasCount ?? 0}
-              </span>
-            ` : ''}
+            <span class="toc-ideas-badge ${!entry.ideasCount ? 'empty' : ''}">
+              ✦${entry.ideasCount ?? 0}
+            </span>
           </div>
           ${entry.summary ? `<div class="toc-summary">${this.escapeHtml(entry.summary)}</div>` : ''}
         </div>
         <div class="toc-entry-actions">
-          <button class="toc-btn-sm btn-zathura" data-page="${docPage}" title="Открыть в zathura на стр. ${docPage}">📖</button>
-          ${entry.level === 1 ? `
-            <button class="toc-btn-sm btn-analyze" data-analyze-id="${entry.id}" title="Анализировать главу">▶ Анализ</button>
-          ` : ''}
+          <button class="toc-btn-sm btn-zathura" data-page="${docPage}" title="Открыть в zathura на стр. ${docPage}">▸ zathura</button>
+          <button class="toc-btn-sm btn-analyze" data-analyze-id="${entry.id}" title="Анализировать">▶ Анализ</button>
           <button class="toc-btn-sm" data-edit-id="${entry.id}" title="Редактировать">✏️</button>
           <button class="toc-btn-sm btn-delete" data-delete-id="${entry.id}" title="Удалить">✕</button>
         </div>
@@ -197,7 +193,7 @@ export class TOCPanel {
     if (treeEl) {
       treeEl.innerHTML = this.toc.length === 0
         ? `<div class="toc-empty">
-            <div class="toc-empty-icon">📑</div>
+            <div class="toc-empty-icon">≡</div>
             <p class="toc-empty-hint">Оглавление пусто.</p>
           </div>`
         : this.toc.map(entry => this.buildEntryHtml(entry)).join('');
@@ -432,14 +428,39 @@ export class TOCPanel {
 
   private async handleAnalyzeChapter(entryId: string): Promise<void> {
     const entry = this.toc.find(e => e.id === entryId);
-    if (!entry || !entry.pageEnd) return;
+    if (!entry) return;
+
+    // Compute page range — if no pageEnd, use a reasonable estimate
+    const pageFrom = entry.page;
+    let pageTo = entry.pageEnd;
+    if (!pageTo) {
+      // Try to find the next entry at the same or higher level
+      const sorted = [...this.toc].sort((a, b) => {
+        if (a.page !== b.page) return a.page - b.page;
+        return a.level - b.level;
+      });
+      const idx = sorted.findIndex(e => e.id === entryId);
+      if (idx >= 0) {
+        for (let j = idx + 1; j < sorted.length; j++) {
+          if (sorted[j].level <= entry.level) {
+            pageTo = sorted[j].page - 1;
+            break;
+          }
+        }
+      }
+      // Fallback: estimate ~10 pages
+      if (!pageTo) {
+        pageTo = Math.min(entry.page + 9, this.book!.totalPages);
+      }
+    }
 
     document.dispatchEvent(new CustomEvent('analyze-chapter', {
       detail: {
         bookId: this.bookId,
-        pageFrom: entry.page,
-        pageTo: entry.pageEnd,
+        pageFrom,
+        pageTo,
         chapterTitle: entry.title,
+        chapterId: entry.id,
       },
     }));
   }

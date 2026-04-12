@@ -10,7 +10,7 @@ import '../styles/components/idea-list.css';
 
 const TYPE_ICONS: Record<string, string> = {
   definition: '📋', method: '🔧', theorem: '📐',
-  insight: '💡', example: '📝', analogy: '🔄',
+  insight: '✦', example: '📝', analogy: '🔄',
 };
 const DEPTH_LABELS: Record<string, string> = { basic: 'Базовый', medium: 'Средний', advanced: 'Продвинутый' };
 const FAM_LABELS: Record<Familiarity, string> = { unknown: 'Не изучал', heard: 'Слышал', known: 'Знаю', new: 'Новая' };
@@ -51,7 +51,7 @@ export class IdeaListView {
     this.container.innerHTML = `
       <div class="idea-list-view">
         <div class="view-header">
-          <h2>💡 Идеи: ${book ? this.esc(book.title) : ''}</h2>
+          <h2>✦ Идеи: ${book ? this.esc(book.title) : ''}</h2>
           <button class="primary-btn" id="btn-analyze">🔍 Анализировать</button>
         </div>
         <div class="filters-bar">
@@ -105,18 +105,18 @@ export class IdeaListView {
         <p class="idea-summary">${this.esc(i.summary)}</p>
         ${i.quote ? `<blockquote class="idea-quote">${this.esc(i.quote)}</blockquote>` : ''}
         <div class="idea-meta">
-          <span>📄 стр. ${i.pages.join(', ')}</span>
+          <span>стр. ${i.pages.join(', ')}</span>
           ${i.relations.length ? `<span>🔗 ${i.relations.length} связей</span>` : ''}
-          <button class="btn-context" data-idea-id="${i.id}" data-book-id="${i.bookId}" data-pages="${i.pages.join(',')}">📄 Контекст</button>
+          <button class="btn-context" data-idea-id="${i.id}" data-book-id="${i.bookId}" data-pages="${i.pages.join(',')}">▽ Контекст</button>
           ${this.bookFilePath ? `
             ${i.pages.map((p, idx) => `
               <button class="btn-zathura" data-page="${p}" data-quote="${this.escAttr(i.quote || '')}" title="Открыть в zathura на стр. ${p}">
-                📖 zathura${idx === 0 && i.quote ? ' + поиск' : ''}
+                ▸ zathura${idx === 0 && i.quote ? ' + поиск' : ''}
               </button>
             `).join('')}
           ` : ''}
           ${!this.bookFilePath ? `
-            <span class="zathura-hint" title="Добавьте путь к файлу в настройках книги">📖 путь не указан</span>
+            <span class="zathura-hint" title="Добавьте путь к файлу в настройках книги">zathura: путь не указан</span>
           ` : ''}
         </div>
         <div class="idea-context-container" id="context-${i.id}"></div>
@@ -223,7 +223,7 @@ export class IdeaListView {
         if (container.classList.contains('context-visible')) {
           container.innerHTML = '';
           container.classList.remove('context-visible');
-          el.textContent = '📄 Контекст';
+          el.textContent = '▽ Контекст';
           return;
         }
 
@@ -255,11 +255,11 @@ export class IdeaListView {
             `).join('');
           }
           container.classList.add('context-visible');
-          el.textContent = '📄 Скрыть контекст';
+          el.textContent = '▽ Скрыть контекст';
         } catch (err) {
           container.innerHTML = `<div class="context-empty">Ошибка загрузки контекста: ${this.esc(String(err))}</div>`;
           container.classList.add('context-visible');
-          el.textContent = '📄 Контекст';
+          el.textContent = '▽ Контекст';
         }
 
         el.classList.remove('btn-zathura-loading');

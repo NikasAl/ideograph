@@ -287,7 +287,7 @@ export class ModelTestView {
       <div class="model-test-view">
         <div class="view-header">
           <div>
-            <h2>🧪 Тест моделей</h2>
+            <h2>⚡ Тест моделей</h2>
             <p class="view-description">
               Загрузите список моделей, выберите и запустите тесты для сравнения качества и скорости ответа AI-моделей.
             </p>
