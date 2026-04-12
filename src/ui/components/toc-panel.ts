@@ -502,6 +502,7 @@ export class TOCPanel {
         bookId: this.bookId,
         tocPages: [from, to],
         mode: book.extractionMode,
+        format: book.format,
         pdfData,
         provider,
         model: settings.activeModel,

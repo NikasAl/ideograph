@@ -35,6 +35,7 @@ export interface TOCExtractionOptions {
   bookId: string;
   tocPages: [number, number];  // range of TOC pages
   mode: 'text' | 'ocr' | 'vlm';
+  format: 'pdf' | 'djvu';     // book format for correct renderer
   pdfData: ArrayBuffer;
   provider: AIProvider;
   model: string;          // text model
@@ -54,7 +55,7 @@ export interface TOCExtractionOptions {
  * 5. Save to book.tableOfContents
  */
 export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]> {
-  const { bookId, tocPages, mode, pdfData, provider, model, onProgress, requestDelayMs } = opts;
+  const { bookId, tocPages, mode, format, pdfData, provider, model, onProgress, requestDelayMs } = opts;
   const ocrModel = opts.ocrModel || model;
   const vlmModel = opts.vlmModel || model;
   const fallbackModels = opts.fallbackModels;
@@ -65,11 +66,11 @@ export async function extractTOC(opts: TOCExtractionOptions): Promise<TOCEntry[]
   const totalPagesCount = tocPages[1] - tocPages[0] + 1;
 
   if (mode === 'text') {
-    return await extractTOCText({ bookId, tocPages, totalPagesCount, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book });
+    return await extractTOCText({ bookId, tocPages, totalPagesCount, format, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book });
   } else if (mode === 'ocr') {
-    return await extractTOCOcr({ bookId, tocPages, totalPagesCount, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book });
+    return await extractTOCOcr({ bookId, tocPages, totalPagesCount, format, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book });
   } else {
-    return await extractTOCVlm({ bookId, tocPages, totalPagesCount, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book });
+    return await extractTOCVlm({ bookId, tocPages, totalPagesCount, format, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book });
   }
 }
 
@@ -237,12 +238,13 @@ function flattenDJVUBookmarks(
 
 async function extractTOCText(opts: {
   bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  format: 'pdf' | 'djvu';
   pdfData: ArrayBuffer; provider: AIProvider; model: string;
   fallbackModels?: string[]; requestDelayMs?: number;
   onProgress?: (msg: string, pct: number) => void;
   book: { totalPages: number };
 }): Promise<TOCEntry[]> {
-  const { bookId, tocPages, totalPagesCount, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book } = opts;
+  const { bookId, tocPages, totalPagesCount, format, pdfData, provider, model, fallbackModels, requestDelayMs, onProgress, book } = opts;
 
   // Step 1: Extract text from all TOC pages
   const pageTexts: Array<{ page: number; text: string }> = [];
@@ -250,10 +252,13 @@ async function extractTOCText(opts: {
     const pct = 5 + Math.round(((p - tocPages[0]) / totalPagesCount) * 15);
     onProgress?.(`Извлечение текста страницы ${p}...`, pct);
     try {
-      const pageText = await extractTextFromPDFPage(pdfData, p);
+      const pageText = format === 'djvu'
+        ? await (await import('./djvu-extractor.js')).extractTextFromDJVUPage(pdfData, p)
+        : await extractTextFromPDFPage(pdfData, p);
       pageTexts.push({ page: p, text: pageText.text });
     } catch (err) {
-      console.warn(`[TOC] Failed to extract text from page ${p}:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[TOC] Failed to extract text from page ${p}: ${errMsg}`);
       pageTexts.push({ page: p, text: '' });
     }
   }
@@ -301,12 +306,13 @@ async function extractTOCText(opts: {
 
 async function extractTOCOcr(opts: {
   bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  format: 'pdf' | 'djvu';
   pdfData: ArrayBuffer; provider: AIProvider; model: string; ocrModel: string;
   fallbackModels?: string[]; requestDelayMs?: number;
   onProgress?: (msg: string, pct: number) => void;
   book: { totalPages: number };
 }): Promise<TOCEntry[]> {
-  const { bookId, tocPages, totalPagesCount, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
+  const { bookId, tocPages, totalPagesCount, format, pdfData, provider, model, ocrModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
 
   // Phase 1: OCR each page to markdown
   const pageMarkdowns: Array<{ page: number; markdown: string }> = [];
@@ -317,7 +323,9 @@ async function extractTOCOcr(opts: {
     if (p > tocPages[0] && requestDelayMs) await sleep(requestDelayMs);
 
     try {
-      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const imageBase64 = format === 'djvu'
+        ? await (await import('./djvu-extractor.js')).renderDJVUPageToImage(pdfData, p)
+        : await renderPDFPageToImage(pdfData, p);
       const visionMsg = buildVisionMessage({ pageNumber: p, imageBase64 }, ocrPageUserPrompt(p));
       const ocrResponse = await provider.chatVision(
         [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
@@ -325,7 +333,8 @@ async function extractTOCOcr(opts: {
       );
       pageMarkdowns.push({ page: p, markdown: ocrResponse.content.trim() });
     } catch (err) {
-      console.warn(`[TOC] OCR page ${p} failed:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[TOC] OCR page ${p} failed: ${errMsg}`);
       pageMarkdowns.push({ page: p, markdown: '' });
     }
   }
@@ -370,12 +379,13 @@ async function extractTOCOcr(opts: {
 
 async function extractTOCVlm(opts: {
   bookId: string; tocPages: [number, number]; totalPagesCount: number;
+  format: 'pdf' | 'djvu';
   pdfData: ArrayBuffer; provider: AIProvider; vlmModel: string;
   fallbackModels?: string[]; requestDelayMs?: number;
   onProgress?: (msg: string, pct: number) => void;
   book: { totalPages: number };
 }): Promise<TOCEntry[]> {
-  const { bookId, tocPages, totalPagesCount, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
+  const { bookId, tocPages, totalPagesCount, format, pdfData, provider, vlmModel, fallbackModels, requestDelayMs, onProgress, book } = opts;
 
   const allRawItems: RawTOCItem[] = [];
 
@@ -386,7 +396,9 @@ async function extractTOCVlm(opts: {
     if (p > tocPages[0] && requestDelayMs) await sleep(requestDelayMs);
 
     try {
-      const imageBase64 = await renderPDFPageToImage(pdfData, p);
+      const imageBase64 = format === 'djvu'
+        ? await (await import('./djvu-extractor.js')).renderDJVUPageToImage(pdfData, p)
+        : await renderPDFPageToImage(pdfData, p);
       const visionMsgs: VisionMessage[] = [
         { role: 'system', content: EXTRACT_TOC_SYSTEM },
         buildVisionMessage({ pageNumber: p, imageBase64 }, extractTocUserVision([p])),
@@ -395,7 +407,8 @@ async function extractTOCVlm(opts: {
       const partial = parseRawTOCResponse(response.content);
       allRawItems.push(...partial);
     } catch (err) {
-      console.warn(`[TOC] VLM page ${p} failed:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[TOC] VLM page ${p} failed: ${errMsg}`);
     }
   }
 
