@@ -3,12 +3,13 @@
 //
 // Tree structure: Book → Chapters → Sections → Ideas
 // - Nodes are rounded rectangles with text INSIDE (mindmap style)
+// - Text wraps to multiple lines when exceeding max width
+// - Node height grows dynamically to fit wrapped text
+// - Tree spacing adapts to actual node heights
 // - Chapters connected by sequential dashed arrows
 // - Collapsible branches with count badges
 // - Chapter spectrum: red → violet
-// - Section colors: same hue, less saturated
 // - Idea colors: by mastery status / familiarity
-// - Cross-branch relation indicators
 // ============================================================
 
 import * as d3 from 'd3';
@@ -30,8 +31,13 @@ interface TreeNodeInfo {
   chapterIndex?: number;
   chapterHue?: number;
   color?: string;
+  strokeColor?: string;
   ideaCount?: number;
   crossLinks?: number;
+  // Layout dimensions (computed once before D3 layout)
+  wrappedLines?: string[];
+  rectW?: number;
+  rectH?: number;
   children?: TreeNodeInfo[];
 }
 
@@ -47,71 +53,135 @@ interface Point {
 }
 
 // ============================================================
-// Node Dimensions (mindmap rects)
+// Node Dimension Constants
 // ============================================================
 
-/** Approximate px per character for Cyrillic text */
-const CHAR_WIDTH: Record<string, number> = {
-  root: 7.8,
-  chapter: 7.2,
-  section: 6.6,
-  idea: 6.2,
+/** Max pixel width per node type — text wraps beyond this */
+const MAX_WIDTH: Record<string, number> = {
+  root: 220,
+  chapter: 200,
+  section: 180,
+  idea: 160,
 };
 
 const FONT_SIZE: Record<string, number> = {
-  root: 14,
-  chapter: 12.5,
-  section: 11.5,
-  idea: 11,
+  root: 13,
+  chapter: 12,
+  section: 11,
+  idea: 10.5,
 };
 
-const RECT_HEIGHT: Record<string, number> = {
-  root: 32,
-  chapter: 28,
-  section: 24,
-  idea: 22,
+/** Approximate px per character for Cyrillic at given font size */
+const CHAR_PX: Record<string, number> = {
+  root: 7.5,
+  chapter: 7.0,
+  section: 6.5,
+  idea: 6.2,
+};
+
+const V_PADDING = 8;          // total vertical padding (top + bottom)
+const LINE_HEIGHT_RATIO = 1.3; // line-height relative to font-size
+const MIN_RECT_H: Record<string, number> = {
+  root: 30,
+  chapter: 26,
+  section: 22,
+  idea: 20,
 };
 
 const RECT_RX: Record<string, number> = {
   root: 8,
   chapter: 6,
   section: 5,
-  idea: 11, // pill shape for ideas
+  idea: 10, // pill shape
 };
 
-const RECT_PADDING_H: Record<string, number> = {
-  root: 20,
-  chapter: 16,
-  section: 14,
-  idea: 12,
-};
+// ============================================================
+// Text Wrapping & Dimension Computation
+// ============================================================
 
-/** Compute rectangle width from text content */
-function nodeRectWidth(d: HNode): number {
-  const name = d.data.name;
-  const cw = CHAR_WIDTH[d.data.nodeType] || 6.5;
-  const pad = RECT_PADDING_H[d.data.nodeType] || 14;
-  const minW = RECT_HEIGHT[d.data.nodeType] || 24;
-  return Math.max(minW, Math.ceil(name.length * cw + pad * 2));
+/**
+ * Wrap text to fit within maxWidth pixels.
+ * Returns array of lines.
+ */
+function wrapText(text: string, charPx: number, maxPx: number): string[] {
+  const maxChars = Math.max(5, Math.floor(maxPx / charPx));
+  if (text.length <= maxChars) return [text];
+
+  // Try to break at spaces (Cyrillic uses regular spaces)
+  const words = text.split(/\s+/);
+  if (words.length <= 1) {
+    // Single long word — hard-break at maxChars
+    const lines: string[] = [];
+    for (let i = 0; i < text.length; i += maxChars) {
+      lines.push(text.substring(i, i + maxChars));
+    }
+    return lines;
+  }
+
+  const lines: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    const candidate = current.length === 0 ? word : current + ' ' + word;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      // If a single word exceeds maxChars, break it
+      if (word.length > maxChars) {
+        for (let i = 0; i < word.length; i += maxChars) {
+          lines.push(word.substring(i, i + maxChars));
+        }
+        current = '';
+      } else {
+        current = word;
+      }
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
-function nodeRectHeight(d: HNode): number {
-  return RECT_HEIGHT[d.data.nodeType] || 24;
+/**
+ * Pre-compute wrapped lines, rect width, and rect height for a node.
+ */
+function computeDimensions(info: TreeNodeInfo): void {
+  const nt = info.nodeType;
+  const charPx = CHAR_PX[nt] || 6.5;
+  const maxPx = MAX_WIDTH[nt] || 180;
+  const fontSize = FONT_SIZE[nt] || 11;
+  const lineHeight = fontSize * LINE_HEIGHT_RATIO;
+  const padH = RECT_PADDING_H(nt);
+
+  const lines = wrapText(info.name, charPx, maxPx);
+  info.wrappedLines = lines;
+
+  // Rect width: max of all line widths (in px) + horizontal padding
+  let maxLinePx = 0;
+  for (const line of lines) {
+    maxLinePx = Math.max(maxLinePx, line.length * charPx);
+  }
+  info.rectW = Math.max(MIN_RECT_H[nt] || 24, maxLinePx + padH * 2);
+
+  // Rect height: lines * lineHeight + vertical padding
+  const minH = MIN_RECT_H[nt] || 22;
+  info.rectH = Math.max(minH, lines.length * lineHeight + V_PADDING);
 }
 
-function nodeFontPx(d: HNode): number {
-  return FONT_SIZE[d.data.nodeType] || 11;
-}
-
-function nodeRx(d: HNode): number {
-  return RECT_RX[d.data.nodeType] || 6;
+function RECT_PADDING_H(nt: string): number {
+  switch (nt) {
+    case 'root': return 18;
+    case 'chapter': return 14;
+    case 'section': return 12;
+    case 'idea': return 10;
+    default: return 12;
+  }
 }
 
 // ============================================================
 // Color Schemes
 // ============================================================
 
-/** Chapter spectrum: hue 0 (red) → hue 270 (violet) */
 function getChapterHue(index: number, total: number): number {
   if (total <= 1) return 0;
   return (index / (total - 1)) * 270;
@@ -125,7 +195,6 @@ function chapterStroke(hue: number): string {
   return `hsl(${Math.round(hue)}, 80%, 38%)`;
 }
 
-/** Section: same hue, less saturated & lighter */
 function sectionFill(hue: number, level: number): string {
   const sat = level === 2 ? 50 : 40;
   const light = level === 2 ? 60 : 66;
@@ -170,18 +239,22 @@ function ideaStrokeColor(idea: Idea): string {
 }
 
 function nodeFill(d: HNode): string {
-  if (d.data.color) return d.data.color;
-  if (d.data.idea) return ideaFillColor(d.data.idea);
-  return '#555';
+  return d.data.color || '#555';
 }
 
 function nodeStroke(d: HNode): string {
+  if (d.data.strokeColor) return d.data.strokeColor;
   if (d.data.nodeType === 'root') return '#6b7280';
   if (d.data.nodeType === 'chapter') return chapterStroke(d.data.chapterHue || 0);
   if (d.data.nodeType === 'section') return sectionStroke(d.data.chapterHue || 0, d.data.tocEntry?.level || 2);
   if (d.data.idea) return ideaStrokeColor(d.data.idea);
   return '#555';
 }
+
+function getRectW(d: HNode): number { return d.data.rectW || 80; }
+function getRectH(d: HNode): number { return d.data.rectH || 26; }
+function getRx(d: HNode): number { return RECT_RX[d.data.nodeType] || 6; }
+function getFontPx(d: HNode): number { return FONT_SIZE[d.data.nodeType] || 11; }
 
 // ============================================================
 // Idea Graph View
@@ -245,6 +318,7 @@ export class IdeaGraphView {
       ch.data.chapterIndex = chIdx;
       ch.data.chapterHue = hue;
       ch.data.color = chapterFill(hue);
+      ch.data.strokeColor = chapterStroke(hue);
       ch.data.ideaCount = this.countDescendantIdeas(ch);
       propagateHue(ch, hue);
       chIdx++;
@@ -254,14 +328,20 @@ export class IdeaGraphView {
     root.descendants().forEach(d => {
       if (d.data.nodeType === 'section') {
         const level = d.data.tocEntry?.level || 2;
-        d.data.color = sectionFill(d.data.chapterHue || 0, level);
+        const hue = d.data.chapterHue || 0;
+        d.data.color = sectionFill(hue, level);
+        d.data.strokeColor = sectionStroke(hue, level);
       } else if (d.data.nodeType === 'idea' && d.data.idea) {
         d.data.color = ideaFillColor(d.data.idea);
+        d.data.strokeColor = ideaStrokeColor(d.data.idea);
         d.data.crossLinks = countCrossLinks(d.data.idea, ideas);
       }
     });
 
-    // Collapse all by default: only chapters visible
+    // ---- Pre-compute dimensions for ALL nodes (including hidden ones) ----
+    root.each(d => computeDimensions(d.data));
+
+    // Collapse all by default
     root.children?.forEach(ch => {
       if (ch.children) {
         ch._children = ch.children as HNode[];
@@ -419,20 +499,21 @@ export class IdeaGraphView {
       return;
     }
 
-    // Tree layout: [vertical gap, horizontal gap] — larger gaps for wider rects
+    // Tree layout: nodeSize[0] = 1px base, separation() handles real spacing
     this.treeLayout = d3.tree<TreeNodeInfo>()
-      .nodeSize([40, 260])
+      .nodeSize([1, 240])
       .separation((a, b) => {
-        if (a.data.nodeType === 'chapter' || b.data.nodeType === 'chapter') return 1.5;
-        if (a.data.nodeType === 'section' || b.data.nodeType === 'section') return 1.2;
-        return 0.9;
+        // Vertical gap = half-heights + minimum gap between rects
+        const hA = a.data.rectH || 26;
+        const hB = b.data.rectH || 26;
+        const gap = 12;
+        return (hA + hB) / 2 + gap;
       });
 
     this.svg = d3.select(svgEl)
       .attr('width', this.width)
       .attr('height', this.height);
 
-    // Defs
     const defs = this.svg.append('defs');
 
     defs.append('marker')
@@ -510,9 +591,9 @@ export class IdeaGraphView {
       .transition().duration(duration)
       .attr('opacity', 1)
       .attr('d', d => {
-        const sw = nodeRectWidth(d.source as HNode);
-        const tw = nodeRectWidth(d.target as HNode);
-        return rectLink(d.source, d.target, sw / 2, tw / 2);
+        const sw = getRectW(d.source as HNode) / 2;
+        const tw = getRectW(d.target as HNode) / 2;
+        return rectLink(d.source, d.target, sw, tw);
       })
       .attr('stroke', d => linkColor(d))
       .attr('stroke-width', d => linkWidth(d));
@@ -535,14 +616,13 @@ export class IdeaGraphView {
     for (let i = 0; i < visibleChapters.length - 1; i++) {
       const ch = visibleChapters[i];
       const next = visibleChapters[i + 1];
-      const cw1 = nodeRectWidth(ch);
-      const cw2 = nodeRectWidth(next);
-      const sx = ch.y! + cw1 / 2;
+      const cw1 = getRectW(ch) / 2;
+      const cw2 = getRectW(next) / 2;
+      const sx = ch.y! + cw1;
       const sy = ch.x!;
-      const tx = next.y! - cw2 / 2;
+      const tx = next.y! - cw2;
       const ty = next.x!;
-      const gap = ty - sy;
-      const curveOut = Math.min(60, Math.abs(gap) * 0.3 + 30);
+      const curveOut = Math.min(50, Math.abs(ty - sy) * 0.3 + 20);
 
       this.gMain.append('path')
         .attr('class', 'seq-arrow')
@@ -572,12 +652,10 @@ export class IdeaGraphView {
       });
 
     // Rectangle shape
-    nodeEnter.append('rect')
-      .attr('class', 'node-shape');
+    nodeEnter.append('rect').attr('class', 'node-shape');
 
-    // Text label
-    nodeEnter.append('text')
-      .attr('class', 'node-label');
+    // Text label (container for tspan children)
+    nodeEnter.append('text').attr('class', 'node-label');
 
     // Badge group
     nodeEnter.append('g').attr('class', 'badge-group');
@@ -593,15 +671,15 @@ export class IdeaGraphView {
       .attr('transform', d => `translate(${d.y},${d.x})`)
       .attr('opacity', 1);
 
-    // Rect shape — sized to fit text
+    // ---- Rect shape ----
     nodeUpdate.select('.node-shape')
       .transition().duration(duration)
-      .attr('width', d => nodeRectWidth(d))
-      .attr('height', d => nodeRectHeight(d))
-      .attr('x', d => -nodeRectWidth(d) / 2)
-      .attr('y', d => -nodeRectHeight(d) / 2)
-      .attr('rx', d => nodeRx(d))
-      .attr('ry', d => nodeRx(d))
+      .attr('width', d => getRectW(d))
+      .attr('height', d => getRectH(d))
+      .attr('x', d => -getRectW(d) / 2)
+      .attr('y', d => -getRectH(d) / 2)
+      .attr('rx', d => getRx(d))
+      .attr('ry', d => getRx(d))
       .attr('fill', d => nodeFill(d))
       .attr('stroke', d => nodeStroke(d))
       .attr('stroke-width', d => {
@@ -611,35 +689,41 @@ export class IdeaGraphView {
       })
       .attr('filter', d => d.data.nodeType === 'chapter' ? 'url(#chapter-glow)' : null);
 
-    // Text inside rect — centered
-    nodeUpdate.select('.node-label')
-      .text(d => d.data.name)
-      .attr('x', 0)
-      .attr('y', 0)
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'central')
-      .attr('fill', d => {
-        if (d.data.nodeType === 'idea') return '#fff';
-        return '#fff';
-      })
-      .attr('font-size', d => `${nodeFontPx(d)}px`)
-      .attr('font-weight', d => {
-        if (d.data.nodeType === 'chapter') return '600';
-        if (d.data.nodeType === 'root') return '700';
-        return '500';
-      })
-      .style('pointer-events', 'none')
-      .style('text-shadow', '0 1px 2px rgba(0,0,0,0.6)');
+    // ---- Text with multi-line tspan ----
+    nodeUpdate.each(function (d) {
+      const textEl = d3.select(this).select<SVGTextElement>('.node-label');
+      textEl.selectAll('tspan').remove();
 
-    // Collapse badge
+      const lines = d.data.wrappedLines || [d.data.name];
+      const fontSize = getFontPx(d);
+      const lineHeight = fontSize * LINE_HEIGHT_RATIO;
+      const totalBlockH = (lines.length - 1) * lineHeight;
+
+      lines.forEach((line, i) => {
+        textEl.append('tspan')
+          .attr('x', 0)
+          .attr('dy', i === 0 ? -totalBlockH / 2 : lineHeight)
+          .text(line);
+      });
+
+      textEl
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'central')
+        .attr('fill', '#fff')
+        .attr('font-size', `${fontSize}px`)
+        .attr('font-weight', d.data.nodeType === 'chapter' || d.data.nodeType === 'root' ? '600' : '500')
+        .style('pointer-events', 'none');
+    });
+
+    // ---- Collapse badge ----
     nodeUpdate.each(function (d) {
       const badge = d3.select(this).select<HTMLDivElement>('.badge-group');
       badge.selectAll('*').remove();
 
       if (d._children && d._children.length > 0) {
         const count = collapsedCount(d);
-        const rw = nodeRectWidth(d);
-        const rh = nodeRectHeight(d);
+        const rw = getRectW(d);
+        const rh = getRectH(d);
 
         badge.append('circle')
           .attr('cx', rw / 2 - 2)
@@ -661,14 +745,14 @@ export class IdeaGraphView {
       }
     });
 
-    // Cross-link indicator
+    // ---- Cross-link indicator ----
     nodeUpdate.each(function (d) {
       const xg = d3.select(this).select<HTMLDivElement>('.xlink-group');
       xg.selectAll('*').remove();
 
       if (d.data.crossLinks && d.data.crossLinks > 0) {
-        const rw = nodeRectWidth(d);
-        const rh = nodeRectHeight(d);
+        const rw = getRectW(d);
+        const rh = getRectH(d);
 
         xg.append('circle')
           .attr('cx', -rw / 2 - 2)
@@ -690,14 +774,14 @@ export class IdeaGraphView {
       }
     });
 
-    // Hover tooltips
+    // Hover
     nodeUpdate
       .on('mouseenter', (event, d) => this.showTooltip(event, d))
       .on('mousemove', (event) => this.moveTooltip(event))
       .on('mouseleave', () => this.hideTooltip());
 
     // ---- EXIT ----
-    const nodeExit = nodeSel.exit()
+    nodeSel.exit()
       .transition().duration(duration)
       .attr('transform', `translate(${source.y ?? 0},${source.x ?? 0})`)
       .attr('opacity', 0)
@@ -901,8 +985,7 @@ const FAM_LABELS: Record<Familiarity, string> = {
 // ============================================================
 
 /**
- * Horizontal tree link between rect edges.
- * Connects from source right edge to target left edge.
+ * Horizontal tree link: right edge of source rect → left edge of target rect.
  */
 function rectLink(s: Point, d: Point, halfW_source: number, halfW_target: number): string {
   const sx = s.y + halfW_source;
