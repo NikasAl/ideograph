@@ -268,6 +268,7 @@ export class IdeaGraphView {
   private tooltip: HTMLDivElement | null = null;
   private root: HNode | null = null;
   private treeLayout: d3.TreeLayout<TreeNodeInfo> | null = null;
+  private zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null;
   private width = 0;
   private height = 0;
 
@@ -283,6 +284,7 @@ export class IdeaGraphView {
     this.gMain = null;
     this.tooltip = null;
     this.root = null;
+    this.zoomBehavior = null;
   }
 
   // ============================================================
@@ -533,6 +535,7 @@ export class IdeaGraphView {
       .on('zoom', (event) => {
         this.gMain!.attr('transform', event.transform.toString());
       });
+    this.zoomBehavior = zoom;
     this.svg.call(zoom);
 
     this.tooltip = document.getElementById('graph-tooltip') as HTMLDivElement;
@@ -757,7 +760,7 @@ export class IdeaGraphView {
   // ============================================================
 
   private toggleNode(d: HNode): void {
-    const isCollapsing = !!d.children; // collapsing = was open, will close
+    const isCollapsing = !!d.children;
     if (d.children) {
       d._children = d.children;
       d.children = undefined;
@@ -767,15 +770,23 @@ export class IdeaGraphView {
     }
     this.updateGraph(d);
 
-    // Auto-pan after transition settles
-    const panDelay = 550;
-    if (isCollapsing) {
-      // Collapsing: pan to parent (d itself)
-      setTimeout(() => this.panToNode(d), panDelay);
-    } else {
-      // Expanding: center on expanded node, show its children
-      setTimeout(() => this.panToNode(d), panDelay);
-    }
+    // Auto-pan AFTER D3 node animation finishes (duration = 500ms)
+    // Using transition end for precise chaining
+    const nodeAnimDuration = 500;
+    setTimeout(() => {
+      if (isCollapsing) {
+        // Collapsing: pan so the parent is on the left, collapsed node visible to the right
+        const parent = d.parent as HNode | undefined;
+        if (parent) {
+          this.panNodeToLeft(parent);
+        } else {
+          this.panNodeToLeft(d);
+        }
+      } else {
+        // Expanding: pan so expanded node (d) is on the left, children appear to the right
+        this.panNodeToLeft(d);
+      }
+    }, nodeAnimDuration + 30); // small buffer after D3 transition
   }
 
   expandAll(): void {
@@ -907,28 +918,43 @@ export class IdeaGraphView {
     const ty = this.height / 2 - (bbox.y + bbox.height / 2) * scale;
 
     this.svg.transition().duration(750).call(
-      d3.zoom<SVGSVGElement, unknown>().transform,
+      this.zoomBehavior!.transform,
       d3.zoomIdentity.translate(tx, ty).scale(scale),
     );
   }
 
-  /** Pan so a specific node is centered horizontally and vertically */
-  private panToNode(d: HNode): void {
-    if (!this.svg || d.x == null || d.y == null) return;
+  /**
+   * Smooth-pan so that a node appears at the LEFT portion of the screen,
+   * vertically centered. Children will be visible to the right.
+   */
+  private panNodeToLeft(d: HNode): void {
+    if (!this.svg || !this.zoomBehavior || d.x == null || d.y == null) return;
 
-    // Get current transform to preserve zoom level
-    const zoomBehavior = d3.zoom<SVGSVGElement, unknown>();
     const currentTransform = d3.zoomTransform(this.svg.node()!);
     const currentScale = currentTransform.k;
 
-    // Target: node center at screen center
-    const tx = this.width / 2 - d.y * currentScale;
-    const ty = this.height / 2 - d.x * currentScale;
+    // Position the node at ~15% from the left edge of the viewport
+    const leftMargin = this.width * 0.15;
+    const verticalCenter = this.height / 2;
 
-    this.svg.transition().duration(600).call(
-      zoomBehavior.transform,
+    // Calculate translation to place node at (leftMargin, verticalCenter)
+    const tx = leftMargin - d.y * currentScale;
+    const ty = verticalCenter - d.x * currentScale;
+
+    this.svg.transition().duration(600).ease(d3.easeCubicInOut).call(
+      this.zoomBehavior.transform,
       d3.zoomIdentity.translate(tx, ty).scale(currentScale),
     );
+  }
+
+  /**
+   * Smooth-pan so that a node's PARENT appears on the left side of the screen.
+   */
+  private panParentToLeft(d: HNode): void {
+    const parent = d.parent as HNode | undefined;
+    if (parent) {
+      this.panNodeToLeft(parent);
+    }
   }
 
   private bindEvents(): void {

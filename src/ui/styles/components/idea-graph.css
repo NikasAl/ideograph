@@ -3,10 +3,11 @@
    ============================================================ */
 
 .graph-view {
-  position: relative;
-  height: calc(100vh - var(--header-height) - 48px);
-  margin: -24px;
-  margin-top: -12px;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
   overflow: hidden;
 }
 
