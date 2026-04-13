@@ -2,6 +2,7 @@
 // Idea Graph View — D3 SVG mind-map with collapsible branches
 //
 // Tree structure: Book → Chapters → Sections → Ideas
+// - Nodes are rounded rectangles with text INSIDE (mindmap style)
 // - Chapters connected by sequential dashed arrows
 // - Collapsible branches with count badges
 // - Chapter spectrum: red → violet
@@ -43,6 +44,67 @@ interface HNode extends d3.HierarchyPointNode<TreeNodeInfo> {
 interface Point {
   x: number;
   y: number;
+}
+
+// ============================================================
+// Node Dimensions (mindmap rects)
+// ============================================================
+
+/** Approximate px per character for Cyrillic text */
+const CHAR_WIDTH: Record<string, number> = {
+  root: 7.8,
+  chapter: 7.2,
+  section: 6.6,
+  idea: 6.2,
+};
+
+const FONT_SIZE: Record<string, number> = {
+  root: 14,
+  chapter: 12.5,
+  section: 11.5,
+  idea: 11,
+};
+
+const RECT_HEIGHT: Record<string, number> = {
+  root: 32,
+  chapter: 28,
+  section: 24,
+  idea: 22,
+};
+
+const RECT_RX: Record<string, number> = {
+  root: 8,
+  chapter: 6,
+  section: 5,
+  idea: 11, // pill shape for ideas
+};
+
+const RECT_PADDING_H: Record<string, number> = {
+  root: 20,
+  chapter: 16,
+  section: 14,
+  idea: 12,
+};
+
+/** Compute rectangle width from text content */
+function nodeRectWidth(d: HNode): number {
+  const name = d.data.name;
+  const cw = CHAR_WIDTH[d.data.nodeType] || 6.5;
+  const pad = RECT_PADDING_H[d.data.nodeType] || 14;
+  const minW = RECT_HEIGHT[d.data.nodeType] || 24;
+  return Math.max(minW, Math.ceil(name.length * cw + pad * 2));
+}
+
+function nodeRectHeight(d: HNode): number {
+  return RECT_HEIGHT[d.data.nodeType] || 24;
+}
+
+function nodeFontPx(d: HNode): number {
+  return FONT_SIZE[d.data.nodeType] || 11;
+}
+
+function nodeRx(d: HNode): number {
+  return RECT_RX[d.data.nodeType] || 6;
 }
 
 // ============================================================
@@ -96,9 +158,7 @@ function ideaFillColor(idea: Idea): string {
 }
 
 function ideaStrokeColor(idea: Idea): string {
-  // Slightly darker shade
   const c = ideaFillColor(idea);
-  // For hex colors, darken by reducing lightness
   const match = c.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
   if (match) {
     const r = Math.max(0, parseInt(match[1], 16) - 40);
@@ -107,6 +167,20 @@ function ideaStrokeColor(idea: Idea): string {
     return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
   }
   return '#444';
+}
+
+function nodeFill(d: HNode): string {
+  if (d.data.color) return d.data.color;
+  if (d.data.idea) return ideaFillColor(d.data.idea);
+  return '#555';
+}
+
+function nodeStroke(d: HNode): string {
+  if (d.data.nodeType === 'root') return '#6b7280';
+  if (d.data.nodeType === 'chapter') return chapterStroke(d.data.chapterHue || 0);
+  if (d.data.nodeType === 'section') return sectionStroke(d.data.chapterHue || 0, d.data.tocEntry?.level || 2);
+  if (d.data.idea) return ideaStrokeColor(d.data.idea);
+  return '#555';
 }
 
 // ============================================================
@@ -129,7 +203,6 @@ export class IdeaGraphView {
     this.bookId = bookId;
   }
 
-  /** Clean up DOM & references */
   destroy(): void {
     this.svg?.remove();
     this.tooltip?.remove();
@@ -155,12 +228,10 @@ export class IdeaGraphView {
 
     assignChapterIds(ideas, toc, pageOffset);
 
-    // Build tree data
     const treeData = this.buildTree(book, toc, ideas, pageOffset);
     const chapters = treeData.children || [];
     const totalChapters = chapters.filter(c => c.nodeType === 'chapter').length;
 
-    // Create D3 hierarchy
     const root = d3.hierarchy<TreeNodeInfo>(treeData) as unknown as HNode;
     root.x0 = 0;
     root.y0 = 0;
@@ -190,7 +261,7 @@ export class IdeaGraphView {
       }
     });
 
-    // Collapse all by default: only chapters are visible
+    // Collapse all by default: only chapters visible
     root.children?.forEach(ch => {
       if (ch.children) {
         ch._children = ch.children as HNode[];
@@ -200,7 +271,6 @@ export class IdeaGraphView {
 
     console.log(`[Graph] Book: "${book.title}", ideas: ${ideas.length}, chapters: ${totalChapters}`);
 
-    // ---- HTML shell ----
     this.container.innerHTML = `
       <div class="graph-view">
         <div class="graph-toolbar">
@@ -210,7 +280,7 @@ export class IdeaGraphView {
           </div>
           <div class="graph-toolbar-right">
             <button class="secondary-btn btn-sm" id="btn-expand-all" title="Развернуть все">+ Развернуть</button>
-            <button class="secondary-btn btn-sm" id="btn-collapse-all" title="Свернуть все">− Свернуть</button>
+            <button class="secondary-btn btn-sm" id="btn-collapse-all" title="Свернуть все">- Свернуть</button>
             <button class="secondary-btn btn-sm" id="btn-graph-fit" title="Вписать в экран">&#x2921; Масштаб</button>
           </div>
         </div>
@@ -229,10 +299,8 @@ export class IdeaGraphView {
         </div>
       </div>`;
 
-    // Build legend
     this.renderLegend(root, totalChapters);
 
-    // Init D3
     if (ideas.length > 0 || toc.length > 0) {
       requestAnimationFrame(() => this.initD3());
     }
@@ -250,7 +318,6 @@ export class IdeaGraphView {
     ideas: Idea[],
     pageOffset: number,
   ): TreeNodeInfo {
-    // Assign each idea to the deepest matching TOC entry
     const tocIdeaMap = new Map<string, Idea[]>();
     const unassigned: Idea[] = [];
 
@@ -278,7 +345,7 @@ export class IdeaGraphView {
 
     const root: TreeNodeInfo = {
       id: `${book.id}_root`,
-      name: book.title.length > 40 ? book.title.substring(0, 38) + '…' : book.title,
+      name: book.title,
       nodeType: 'root',
     };
 
@@ -288,7 +355,6 @@ export class IdeaGraphView {
       rootChildren.push(this.buildTocSubtree(chapter, toc, tocIdeaMap));
     }
 
-    // Unassigned ideas
     if (unassigned.length > 0) {
       rootChildren.push({
         id: `${book.id}_unassigned`,
@@ -312,12 +378,10 @@ export class IdeaGraphView {
   ): TreeNodeInfo {
     const children: TreeNodeInfo[] = [];
 
-    // Child TOC entries
     for (const child of allToc.filter(e => e.parentId === entry.id)) {
       children.push(this.buildTocSubtree(child, allToc, ideaMap));
     }
 
-    // Ideas assigned to this entry
     for (const idea of ideaMap.get(entry.id) || []) {
       children.push(ideaToNode(idea));
     }
@@ -355,16 +419,15 @@ export class IdeaGraphView {
       return;
     }
 
-    // Tree layout: nodeSize = [vertical gap, horizontal gap]
+    // Tree layout: [vertical gap, horizontal gap] — larger gaps for wider rects
     this.treeLayout = d3.tree<TreeNodeInfo>()
-      .nodeSize([28, 200])
+      .nodeSize([40, 260])
       .separation((a, b) => {
-        if (a.data.nodeType === 'chapter' || b.data.nodeType === 'chapter') return 1.4;
-        if (a.data.nodeType === 'section' || b.data.nodeType === 'section') return 1.15;
-        return 0.85;
+        if (a.data.nodeType === 'chapter' || b.data.nodeType === 'chapter') return 1.5;
+        if (a.data.nodeType === 'section' || b.data.nodeType === 'section') return 1.2;
+        return 0.9;
       });
 
-    // SVG
     this.svg = d3.select(svgEl)
       .attr('width', this.width)
       .attr('height', this.height);
@@ -372,7 +435,6 @@ export class IdeaGraphView {
     // Defs
     const defs = this.svg.append('defs');
 
-    // Arrow marker for sequential chapter links
     defs.append('marker')
       .attr('id', 'arrow-seq')
       .attr('viewBox', '0 -5 10 10')
@@ -385,23 +447,20 @@ export class IdeaGraphView {
       .attr('d', 'M0,-4L8,0L0,4')
       .attr('fill', '#555');
 
-    // Glow filter for chapter nodes
     const glow = defs.append('filter')
       .attr('id', 'chapter-glow')
-      .attr('x', '-30%').attr('y', '-30%')
-      .attr('width', '160%').attr('height', '160%');
+      .attr('x', '-20%').attr('y', '-30%')
+      .attr('width', '140%').attr('height', '160%');
     glow.append('feGaussianBlur')
-      .attr('stdDeviation', 3)
+      .attr('stdDeviation', 2.5)
       .attr('result', 'coloredBlur');
     const feMerge = glow.append('feMerge');
     feMerge.append('feMergeNode').attr('in', 'coloredBlur');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    // Main zoomable group
     this.gMain = this.svg.append('g')
       .attr('class', 'graph-main');
 
-    // Zoom
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.05, 4])
       .on('zoom', (event) => {
@@ -409,18 +468,15 @@ export class IdeaGraphView {
       });
     this.svg.call(zoom);
 
-    // Tooltip
     this.tooltip = document.getElementById('graph-tooltip') as HTMLDivElement;
 
-    // Initial update
     this.updateGraph(this.root);
 
-    // Fit after layout settles
     setTimeout(() => this.fitView(), 600);
   }
 
   // ============================================================
-  // Graph Update (D3 enter/update/exit)
+  // Graph Update
   // ============================================================
 
   private updateGraph(source: HNode): void {
@@ -428,19 +484,16 @@ export class IdeaGraphView {
 
     const duration = 500;
 
-    // Compute layout
     this.treeLayout(this.root);
 
-    // Normalized node list (visible only)
     const allNodes = this.root.descendants() as HNode[];
     const allLinks = this.root.links() as d3.HierarchyPointLink<TreeNodeInfo>[];
 
-    // ---- LINKS (tree branches) ----
+    // ---- LINKS ----
     const linkSel = this.gMain
       .selectAll<SVGPathElement, d3.HierarchyPointLink<TreeNodeInfo>>('.tree-link')
       .data(allLinks, d => `${d.source.data.id}->${d.target.data.id}`);
 
-    // Enter
     const linkEnter = linkSel.enter()
       .append('path')
       .attr('class', 'tree-link')
@@ -450,23 +503,25 @@ export class IdeaGraphView {
       .attr('opacity', 0)
       .attr('d', () => {
         const o: Point = { x: source.x0 ?? 0, y: source.y0 ?? 0 };
-        return diag(o, o);
+        return rectLink(o, o, 0, 0);
       });
 
-    // Update
     linkEnter.merge(linkSel as unknown as d3.Selection<SVGPathElement, d3.HierarchyPointLink<TreeNodeInfo>, SVGPathElement, unknown>)
       .transition().duration(duration)
       .attr('opacity', 1)
-      .attr('d', d => diag(d.source, d.target))
+      .attr('d', d => {
+        const sw = nodeRectWidth(d.source as HNode);
+        const tw = nodeRectWidth(d.target as HNode);
+        return rectLink(d.source, d.target, sw / 2, tw / 2);
+      })
       .attr('stroke', d => linkColor(d))
       .attr('stroke-width', d => linkWidth(d));
 
-    // Exit
     linkSel.exit()
       .transition().duration(duration)
       .attr('d', () => {
         const o: Point = { x: source.x ?? 0, y: source.y ?? 0 };
-        return diag(o, o);
+        return rectLink(o, o, 0, 0);
       })
       .attr('opacity', 0)
       .remove();
@@ -480,16 +535,18 @@ export class IdeaGraphView {
     for (let i = 0; i < visibleChapters.length - 1; i++) {
       const ch = visibleChapters[i];
       const next = visibleChapters[i + 1];
-      const sx = ch.y!;
+      const cw1 = nodeRectWidth(ch);
+      const cw2 = nodeRectWidth(next);
+      const sx = ch.y! + cw1 / 2;
       const sy = ch.x!;
-      const tx = next.y!;
+      const tx = next.y! - cw2 / 2;
       const ty = next.x!;
       const gap = ty - sy;
-      const curveOut = Math.min(70, Math.abs(gap) * 0.35 + 35);
+      const curveOut = Math.min(60, Math.abs(gap) * 0.3 + 30);
 
       this.gMain.append('path')
         .attr('class', 'seq-arrow')
-        .attr('d', `M ${sx - 15} ${sy} C ${sx - curveOut} ${sy}, ${tx - curveOut} ${ty}, ${tx - 15} ${ty}`)
+        .attr('d', `M ${sx} ${sy} C ${sx + curveOut} ${sy}, ${tx - curveOut} ${ty}, ${tx} ${ty}`)
         .attr('fill', 'none')
         .attr('stroke', '#555')
         .attr('stroke-width', 1.5)
@@ -514,15 +571,15 @@ export class IdeaGraphView {
         if (!d.data.idea) this.toggleNode(d);
       });
 
-    // Shape
-    nodeEnter.append('circle')
+    // Rectangle shape
+    nodeEnter.append('rect')
       .attr('class', 'node-shape');
 
-    // Label
+    // Text label
     nodeEnter.append('text')
       .attr('class', 'node-label');
 
-    // Badge group (collapse count)
+    // Badge group
     nodeEnter.append('g').attr('class', 'badge-group');
 
     // Cross-link indicator
@@ -536,39 +593,43 @@ export class IdeaGraphView {
       .attr('transform', d => `translate(${d.y},${d.x})`)
       .attr('opacity', 1);
 
-    // Shape
+    // Rect shape — sized to fit text
     nodeUpdate.select('.node-shape')
       .transition().duration(duration)
-      .attr('r', d => nodeRadius(d))
-      .attr('fill', d => d.data.color || '#666')
-      .attr('stroke', d => nodeStrokeColor(d))
+      .attr('width', d => nodeRectWidth(d))
+      .attr('height', d => nodeRectHeight(d))
+      .attr('x', d => -nodeRectWidth(d) / 2)
+      .attr('y', d => -nodeRectHeight(d) / 2)
+      .attr('rx', d => nodeRx(d))
+      .attr('ry', d => nodeRx(d))
+      .attr('fill', d => nodeFill(d))
+      .attr('stroke', d => nodeStroke(d))
       .attr('stroke-width', d => {
         if (d.data.nodeType === 'chapter') return 2.5;
-        if (d.data.nodeType === 'root') return 3;
+        if (d.data.nodeType === 'root') return 2.5;
         return 1.5;
       })
       .attr('filter', d => d.data.nodeType === 'chapter' ? 'url(#chapter-glow)' : null);
 
-    // Label
+    // Text inside rect — centered
     nodeUpdate.select('.node-label')
-      .text(d => truncLabel(d.data.name, d.data.nodeType))
-      .attr('x', d => nodeRadius(d) + 7)
-      .attr('dy', '0.35em')
+      .text(d => d.data.name)
+      .attr('x', 0)
+      .attr('y', 0)
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'central')
       .attr('fill', d => {
-        if (d.data.nodeType === 'idea') return '#d4d4d4';
-        return '#e5e7eb';
+        if (d.data.nodeType === 'idea') return '#fff';
+        return '#fff';
       })
-      .attr('font-size', d => {
-        if (d.data.nodeType === 'root') return '14px';
-        if (d.data.nodeType === 'chapter') return '12.5px';
-        return '11px';
-      })
+      .attr('font-size', d => `${nodeFontPx(d)}px`)
       .attr('font-weight', d => {
         if (d.data.nodeType === 'chapter') return '600';
         if (d.data.nodeType === 'root') return '700';
-        return '400';
+        return '500';
       })
-      .style('text-shadow', '0 1px 3px rgba(0,0,0,0.8)');
+      .style('pointer-events', 'none')
+      .style('text-shadow', '0 1px 2px rgba(0,0,0,0.6)');
 
     // Collapse badge
     nodeUpdate.each(function (d) {
@@ -577,18 +638,20 @@ export class IdeaGraphView {
 
       if (d._children && d._children.length > 0) {
         const count = collapsedCount(d);
+        const rw = nodeRectWidth(d);
+        const rh = nodeRectHeight(d);
 
         badge.append('circle')
-          .attr('cx', 0)
-          .attr('cy', d.data.nodeType === 'chapter' ? -15 : -12)
-          .attr('r', 9)
+          .attr('cx', rw / 2 - 2)
+          .attr('cy', -rh / 2 + 2)
+          .attr('r', 10)
           .attr('fill', '#1f2937')
           .attr('stroke', '#6b7280')
           .attr('stroke-width', 1);
 
         badge.append('text')
-          .attr('x', 0)
-          .attr('y', d.data.nodeType === 'chapter' ? -15 : -12)
+          .attr('x', rw / 2 - 2)
+          .attr('y', -rh / 2 + 2)
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
           .attr('fill', '#e5e7eb')
@@ -604,18 +667,20 @@ export class IdeaGraphView {
       xg.selectAll('*').remove();
 
       if (d.data.crossLinks && d.data.crossLinks > 0) {
-        const r = nodeRadius(d);
+        const rw = nodeRectWidth(d);
+        const rh = nodeRectHeight(d);
+
         xg.append('circle')
-          .attr('cx', r + 2)
-          .attr('cy', -r + 1)
-          .attr('r', 5)
+          .attr('cx', -rw / 2 - 2)
+          .attr('cy', -rh / 2 + 2)
+          .attr('r', 7)
           .attr('fill', '#f59e0b')
           .attr('stroke', '#92400e')
           .attr('stroke-width', 0.8);
 
         xg.append('text')
-          .attr('x', r + 2)
-          .attr('y', -r + 1)
+          .attr('x', -rw / 2 - 2)
+          .attr('y', -rh / 2 + 2)
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
           .attr('fill', '#fff')
@@ -625,7 +690,7 @@ export class IdeaGraphView {
       }
     });
 
-    // Hover
+    // Hover tooltips
     nodeUpdate
       .on('mouseenter', (event, d) => this.showTooltip(event, d))
       .on('mousemove', (event) => this.moveTooltip(event))
@@ -638,9 +703,7 @@ export class IdeaGraphView {
       .attr('opacity', 0)
       .remove();
 
-    nodeExit.select('.node-shape').attr('r', 0);
-
-    // Store positions for next transition
+    // Store positions
     allNodes.forEach(d => {
       d.x0 = d.x ?? 0;
       d.y0 = d.y ?? 0;
@@ -681,10 +744,6 @@ export class IdeaGraphView {
     this.updateGraph(this.root);
     setTimeout(() => this.fitView(), 550);
   }
-
-  // ============================================================
-  // Visual helpers
-  // ============================================================
 
   // ============================================================
   // Tooltip
@@ -753,7 +812,7 @@ export class IdeaGraphView {
     html += '<span class="legend-title">Главы:</span>';
     chapters.forEach(ch => {
       const color = ch.data.color || '#888';
-      const name = truncLabel(ch.data.name, 'chapter');
+      const name = ch.data.name.length > 25 ? ch.data.name.substring(0, 23) + '…' : ch.data.name;
       const cnt = ch.data.ideaCount ?? 0;
       html += `<span class="legend-chip"><span class="legend-dot" style="background:${color}"></span>${esc(name)} (${cnt})</span>`;
     });
@@ -796,11 +855,11 @@ export class IdeaGraphView {
     const bbox = el.getBBox();
     if (bbox.width === 0 || bbox.height === 0) return;
 
-    const pad = 50;
+    const pad = 60;
     const scale = Math.min(
       (this.width - pad * 2) / bbox.width,
       (this.height - pad * 2) / bbox.height,
-      1.6,
+      1.5,
     );
     const tx = this.width / 2 - (bbox.x + bbox.width / 2) * scale;
     const ty = this.height / 2 - (bbox.y + bbox.height / 2) * scale;
@@ -841,10 +900,15 @@ const FAM_LABELS: Record<Familiarity, string> = {
 // Pure helper functions
 // ============================================================
 
-/** Horizontal tree link (cubic bezier) */
-function diag(s: Point, d: Point): string {
-  const midY = (s.y + d.y) / 2;
-  return `M ${s.y} ${s.x} C ${midY} ${s.x}, ${midY} ${d.x}, ${d.y} ${d.x}`;
+/**
+ * Horizontal tree link between rect edges.
+ * Connects from source right edge to target left edge.
+ */
+function rectLink(s: Point, d: Point, halfW_source: number, halfW_target: number): string {
+  const sx = s.y + halfW_source;
+  const dx = d.y - halfW_target;
+  const midX = (sx + dx) / 2;
+  return `M ${sx} ${s.x} C ${midX} ${s.x}, ${midX} ${d.x}, ${dx} ${d.x}`;
 }
 
 function propagateHue(node: d3.HierarchyNode<TreeNodeInfo>, hue: number): void {
@@ -888,24 +952,6 @@ function ideaToNode(idea: Idea): TreeNodeInfo {
   };
 }
 
-function nodeRadius(d: HNode): number {
-  switch (d.data.nodeType) {
-    case 'root': return 12;
-    case 'chapter': return 9;
-    case 'section': return 6;
-    case 'idea': return Math.max(4, (d.data.idea?.importance || 3) * 1.4);
-    default: return 5;
-  }
-}
-
-function nodeStrokeColor(d: HNode): string {
-  if (d.data.nodeType === 'root') return '#6b7280';
-  if (d.data.nodeType === 'chapter') return chapterStroke(d.data.chapterHue || 0);
-  if (d.data.nodeType === 'section') return sectionStroke(d.data.chapterHue || 0, d.data.tocEntry?.level || 2);
-  if (d.data.idea) return ideaStrokeColor(d.data.idea);
-  return '#555';
-}
-
 function linkWidth(d: d3.HierarchyPointLink<TreeNodeInfo>): number {
   if (d.target.data.nodeType === 'chapter') return 2;
   if (d.target.data.nodeType === 'section') return 1.6;
@@ -916,14 +962,8 @@ function linkColor(d: d3.HierarchyPointLink<TreeNodeInfo>): string {
   const t = d.target;
   if (t.data.nodeType === 'chapter') return chapterStroke(t.data.chapterHue || 0);
   if (t.data.nodeType === 'section') return sectionStroke(t.data.chapterHue || 0, t.data.tocEntry?.level || 2);
-  if (t.data.idea) return 'rgba(255,255,255,0.12)';
+  if (t.data.idea) return 'rgba(255,255,255,0.15)';
   return 'rgba(255,255,255,0.08)';
-}
-
-function truncLabel(name: string, nodeType: string): string {
-  const max = nodeType === 'root' ? 40 : nodeType === 'chapter' ? 28 : nodeType === 'section' ? 22 : 20;
-  if (name.length <= max) return name;
-  return name.substring(0, max - 1) + '…';
 }
 
 function esc(str: string): string {
