@@ -1,5 +1,5 @@
 /* ============================================================
-   Idea Graph — component styles
+   Idea Graph — D3 SVG mind-map styles
    ============================================================ */
 
 .graph-view {
@@ -9,6 +9,8 @@
   margin: -24px;
   margin-top: -12px;
 }
+
+/* ---- Toolbar ---- */
 
 .graph-toolbar {
   display: flex;
@@ -28,7 +30,7 @@
 .graph-toolbar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .graph-title {
@@ -37,34 +39,84 @@
   color: var(--text-primary);
 }
 
-.btn-sm {
-  padding: 4px 12px;
+.idea-count {
   font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
 }
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+/* ---- Legend ---- */
 
 .graph-legend {
   display: flex;
-  gap: 12px;
-  padding: 4px 16px 8px;
   flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 4px 16px 8px;
   flex-shrink: 0;
 }
 
-.legend-item {
+.legend-group {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.legend-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 2px;
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
   color: var(--text-secondary);
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
+.legend-dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   display: inline-block;
   flex-shrink: 0;
 }
+
+.xlink-badge-legend {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 7px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.seq-line-legend {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  border-top: 1.5px dashed #555;
+  vertical-align: middle;
+}
+
+/* ---- Graph Container ---- */
 
 .graph-container {
   position: relative;
@@ -76,7 +128,151 @@
   overflow: hidden;
 }
 
-.graph-canvas {
+.graph-svg {
+  display: block;
   width: 100%;
   height: 100%;
+  cursor: grab;
+}
+
+.graph-svg:active {
+  cursor: grabbing;
+}
+
+/* ---- Tree Nodes ---- */
+
+.tree-node {
+  transition: opacity 0.3s ease;
+}
+
+.node-shape {
+  stroke-width: 1.5;
+  transition: r 0.3s ease, fill 0.3s ease;
+  cursor: pointer;
+}
+
+.node-chapter .node-shape:hover {
+  filter: brightness(1.2);
+}
+
+.node-section .node-shape {
+  stroke-dasharray: none;
+}
+
+.node-idea .node-shape {
+  cursor: default;
+}
+
+.node-idea .node-shape:hover {
+  filter: brightness(1.15);
+}
+
+.node-label {
+  pointer-events: none;
+  user-select: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  fill: #e0e0e0;
+}
+
+/* ---- Tree Links ---- */
+
+.tree-link {
+  fill: none;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.seq-arrow {
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+/* ---- Tooltip ---- */
+
+.graph-tooltip {
+  position: fixed;
+  z-index: 1000;
+  display: none;
+  opacity: 0;
+  max-width: 340px;
+  padding: 10px 14px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d1d5db;
+}
+
+.graph-tooltip.visible {
+  display: block;
+  opacity: 1;
+}
+
+.tt-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f3f4f6;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.tt-type {
+  font-size: 10px;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+
+.tt-body {
+  font-size: 11px;
+  color: #d1d5db;
+  margin-bottom: 6px;
+  max-height: 80px;
+  overflow-y: auto;
+  word-break: break-word;
+  border-top: 1px solid #374151;
+  padding-top: 6px;
+}
+
+.tt-meta {
+  font-size: 10px;
+  color: #9ca3af;
+  line-height: 1.6;
+}
+
+.tt-xlink {
+  font-size: 10px;
+  color: #f59e0b;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+/* ---- Empty State ---- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.empty-icon {
+  font-size: 36px;
+  opacity: 0.3;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+.empty-hint {
+  font-size: 12px;
+  opacity: 0.6;
 }
