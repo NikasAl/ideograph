@@ -6,8 +6,8 @@
 // - Text wraps to multiple lines when exceeding max width
 // - Node height grows dynamically to fit wrapped text
 // - Tree spacing adapts to actual node heights
-// - Chapters connected by sequential dashed arrows
 // - Collapsible branches with count badges
+// - Auto-pan: expand centers node, collapse centers parent
 // - Chapter spectrum: red → violet
 // - Idea colors: by mastery status / familiarity
 // ============================================================
@@ -514,18 +514,6 @@ export class IdeaGraphView {
 
     const defs = this.svg.append('defs');
 
-    defs.append('marker')
-      .attr('id', 'arrow-seq')
-      .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 8)
-      .attr('refY', 0)
-      .attr('markerWidth', 6)
-      .attr('markerHeight', 6)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-4L8,0L0,4')
-      .attr('fill', '#555');
-
     const glow = defs.append('filter')
       .attr('id', 'chapter-glow')
       .attr('x', '-20%').attr('y', '-30%')
@@ -604,34 +592,6 @@ export class IdeaGraphView {
       })
       .attr('opacity', 0)
       .remove();
-
-    // ---- SEQUENTIAL CHAPTER ARROWS ----
-    this.gMain.selectAll<SVGPathElement, unknown>('.seq-arrow').remove();
-
-    const visibleChapters = (this.root.children || []).filter(
-      ch => ch.data.nodeType === 'chapter' && ch.x != null && ch.y != null,
-    );
-    for (let i = 0; i < visibleChapters.length - 1; i++) {
-      const ch = visibleChapters[i];
-      const next = visibleChapters[i + 1];
-      const cw1 = getRectW(ch) / 2;
-      const cw2 = getRectW(next) / 2;
-      const sx = ch.y! + cw1;
-      const sy = ch.x!;
-      const tx = next.y! - cw2;
-      const ty = next.x!;
-      const curveOut = Math.min(50, Math.abs(ty - sy) * 0.3 + 20);
-
-      this.gMain.append('path')
-        .attr('class', 'seq-arrow')
-        .attr('d', `M ${sx} ${sy} C ${sx + curveOut} ${sy}, ${tx - curveOut} ${ty}, ${tx} ${ty}`)
-        .attr('fill', 'none')
-        .attr('stroke', '#555')
-        .attr('stroke-width', 1.5)
-        .attr('stroke-dasharray', '5,4')
-        .attr('marker-end', 'url(#arrow-seq)')
-        .attr('opacity', 0.5);
-    }
 
     // ---- NODES ----
     const nodeSel = this.gMain
@@ -797,6 +757,7 @@ export class IdeaGraphView {
   // ============================================================
 
   private toggleNode(d: HNode): void {
+    const isCollapsing = !!d.children; // collapsing = was open, will close
     if (d.children) {
       d._children = d.children;
       d.children = undefined;
@@ -805,6 +766,16 @@ export class IdeaGraphView {
       d._children = undefined;
     }
     this.updateGraph(d);
+
+    // Auto-pan after transition settles
+    const panDelay = 550;
+    if (isCollapsing) {
+      // Collapsing: pan to parent (d itself)
+      setTimeout(() => this.panToNode(d), panDelay);
+    } else {
+      // Expanding: center on expanded node, show its children
+      setTimeout(() => this.panToNode(d), panDelay);
+    }
   }
 
   expandAll(): void {
@@ -909,7 +880,6 @@ export class IdeaGraphView {
     // Badges
     html += '<div class="legend-group">';
     html += '<span class="legend-chip"><span class="xlink-badge-legend">N</span> кросс-связи</span>';
-    html += '<span class="legend-chip"><span class="seq-line-legend"></span> порядок глав</span>';
     html += '</div>';
 
     el.innerHTML = html;
@@ -927,7 +897,7 @@ export class IdeaGraphView {
     const bbox = el.getBBox();
     if (bbox.width === 0 || bbox.height === 0) return;
 
-    const pad = 60;
+    const pad = 10; // minimal padding — use every pixel
     const scale = Math.min(
       (this.width - pad * 2) / bbox.width,
       (this.height - pad * 2) / bbox.height,
@@ -939,6 +909,25 @@ export class IdeaGraphView {
     this.svg.transition().duration(750).call(
       d3.zoom<SVGSVGElement, unknown>().transform,
       d3.zoomIdentity.translate(tx, ty).scale(scale),
+    );
+  }
+
+  /** Pan so a specific node is centered horizontally and vertically */
+  private panToNode(d: HNode): void {
+    if (!this.svg || d.x == null || d.y == null) return;
+
+    // Get current transform to preserve zoom level
+    const zoomBehavior = d3.zoom<SVGSVGElement, unknown>();
+    const currentTransform = d3.zoomTransform(this.svg.node()!);
+    const currentScale = currentTransform.k;
+
+    // Target: node center at screen center
+    const tx = this.width / 2 - d.y * currentScale;
+    const ty = this.height / 2 - d.x * currentScale;
+
+    this.svg.transition().duration(600).call(
+      zoomBehavior.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(currentScale),
     );
   }
 
