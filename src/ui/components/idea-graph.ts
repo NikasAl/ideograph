@@ -353,18 +353,6 @@ export class IdeaGraphView {
 
     this.container.innerHTML = `
       <div class="graph-view">
-        <div class="graph-toolbar">
-          <div class="graph-toolbar-left">
-            <span class="graph-title">~ Граф идей</span>
-            <span class="idea-count">${ideas.length} идей</span>
-          </div>
-          <div class="graph-toolbar-right">
-            <button class="secondary-btn btn-sm" id="btn-expand-all" title="Развернуть все">+ Развернуть</button>
-            <button class="secondary-btn btn-sm" id="btn-collapse-all" title="Свернуть все">- Свернуть</button>
-            <button class="secondary-btn btn-sm" id="btn-graph-fit" title="Вписать в экран">&#x2921; Масштаб</button>
-          </div>
-        </div>
-        <div class="graph-legend" id="graph-legend"></div>
         <div class="graph-container" id="graph-wrapper">
           ${ideas.length === 0 && toc.length === 0 ? `
             <div class="empty-state">
@@ -374,12 +362,22 @@ export class IdeaGraphView {
             </div>
           ` : `
             <svg id="graph-svg" class="graph-svg"></svg>
-            <div id="graph-tooltip" class="graph-tooltip"></div>
           `}
+          <div id="graph-tooltip" class="graph-tooltip"></div>
         </div>
+        <div class="graph-overlay graph-toolbar-overlay">
+          <span class="graph-title">~ Граф идей</span>
+          <span class="idea-count">${ideas.length} идей</span>
+          <div class="graph-btn-group">
+            <button class="graph-overlay-btn" id="btn-expand-all" title="Развернуть все">+ Развернуть</button>
+            <button class="graph-overlay-btn" id="btn-collapse-all" title="Свернуть все">- Свернуть</button>
+            <button class="graph-overlay-btn" id="btn-graph-fit" title="Вписать в экран">&#x2921; Масштаб</button>
+          </div>
+        </div>
+        <div class="graph-overlay graph-legend" id="graph-legend"></div>
       </div>`;
 
-    this.renderLegend(root, totalChapters);
+    this.renderLegend();
 
     if (ideas.length > 0 || toc.length > 0) {
       requestAnimationFrame(() => this.initD3());
@@ -501,7 +499,7 @@ export class IdeaGraphView {
 
     // Tree layout: nodeSize[0] = 1px base, separation() handles real spacing
     this.treeLayout = d3.tree<TreeNodeInfo>()
-      .nodeSize([1, 240])
+      .nodeSize([1, 420])
       .separation((a, b) => {
         // Vertical gap = half-heights + minimum gap between rects
         const hA = a.data.rectH || 26;
@@ -886,24 +884,14 @@ export class IdeaGraphView {
   // Legend
   // ============================================================
 
-  private renderLegend(root: d3.HierarchyNode<TreeNodeInfo>, total: number): void {
+  private renderLegend(): void {
     const el = document.getElementById('graph-legend');
     if (!el) return;
 
-    const chapters = (root.children || []).filter(c => c.data.nodeType === 'chapter');
+    let html = '';
 
-    let html = '<div class="legend-group">';
-    html += '<span class="legend-title">Главы:</span>';
-    chapters.forEach(ch => {
-      const color = ch.data.color || '#888';
-      const name = ch.data.name.length > 25 ? ch.data.name.substring(0, 23) + '…' : ch.data.name;
-      const cnt = ch.data.ideaCount ?? 0;
-      html += `<span class="legend-chip"><span class="legend-dot" style="background:${color}"></span>${esc(name)} (${cnt})</span>`;
-    });
-    html += '</div>';
-
+    // Idea status colors
     html += '<div class="legend-group">';
-    html += '<span class="legend-title">Статус идей:</span>';
     const statuses: Array<[string, string]> = [
       ['Освоена', STATUS_COLORS.mastered],
       ['Применена', STATUS_COLORS.applied],
@@ -918,8 +906,8 @@ export class IdeaGraphView {
     }
     html += '</div>';
 
+    // Badges
     html += '<div class="legend-group">';
-    html += '<span class="legend-title">Пометки:</span>';
     html += '<span class="legend-chip"><span class="xlink-badge-legend">N</span> кросс-связи</span>';
     html += '<span class="legend-chip"><span class="seq-line-legend"></span> порядок глав</span>';
     html += '</div>';
