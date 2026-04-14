@@ -44,9 +44,9 @@ export class IdeaListView {
     const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
     // Re-compute chapterIds with current pageOffset so chapter filter works correctly
     assignChapterIds(allIdeas, toc, pageOffset);
-    // Build TOC path lookup for each idea
+    // Build TOC path lookup for each idea (idea.id → [rootEntry, ..., mostSpecificEntry])
     const tocPaths = this.buildTocPaths(allIdeas, toc, pageOffset);
-    const ideas = this.applyFilters(allIdeas);
+    const ideas = this.applyFilters(allIdeas, tocPaths);
 
     this.tocEntries = toc;
     const allSections = toc.length > 0
@@ -380,14 +380,18 @@ export class IdeaListView {
     document.addEventListener('ideas-updated', rerender, { once: true });
   }
 
-  private applyFilters(ideas: Idea[]): Idea[] {
+  private applyFilters(ideas: Idea[], tocPaths: Map<string, TOCEntry[]>): Idea[] {
     // Build a set of selected TOC entry IDs (selected + all descendants)
     const selectedTocIds = this.getSelectedTocIds();
     return ideas.filter(i => {
       if (this.filters.familiarity !== 'all' && i.familiarity !== this.filters.familiarity) return false;
       if (this.filters.status !== 'all' && i.status !== this.filters.status) return false;
       if (this.filters.type !== 'all' && i.type !== this.filters.type) return false;
-      if (selectedTocIds.size > 0 && !selectedTocIds.has(i.chapterId || '')) return false;
+      if (selectedTocIds.size > 0) {
+        // Match if ANY entry in the idea's TOC path is in the selected set
+        const path = tocPaths.get(i.id);
+        if (!path || !path.some(e => selectedTocIds.has(e.id))) return false;
+      }
       return true;
     });
   }
