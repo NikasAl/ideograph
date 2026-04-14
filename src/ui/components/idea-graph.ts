@@ -271,6 +271,8 @@ export class IdeaGraphView {
   private zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null;
   private width = 0;
   private height = 0;
+  private focusedNode: HNode | null = null;
+  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -278,6 +280,11 @@ export class IdeaGraphView {
   }
 
   destroy(): void {
+    if (this.keydownHandler) {
+      document.removeEventListener('keydown', this.keydownHandler);
+      this.keydownHandler = null;
+    }
+    this.focusedNode = null;
     this.svg?.remove();
     this.tooltip?.remove();
     this.svg = null;
@@ -540,6 +547,18 @@ export class IdeaGraphView {
 
     this.tooltip = document.getElementById('graph-tooltip') as HTMLDivElement;
 
+    // Keyboard navigation
+    this.keydownHandler = (e: KeyboardEvent) => this.handleKeyDown(e);
+    document.addEventListener('keydown', this.keydownHandler);
+
+    // Click on SVG background → clear focus
+    this.svg.on('click', (event: MouseEvent) => {
+      if (event.target === svgEl) {
+        this.focusedNode = null;
+        this.gMain?.selectAll('.focus-ring').remove();
+      }
+    });
+
     this.updateGraph(this.root);
 
     setTimeout(() => this.fitView(), 600);
@@ -609,7 +628,12 @@ export class IdeaGraphView {
       .style('cursor', d => d.data.idea ? 'default' : 'pointer')
       .attr('opacity', 0)
       .on('click', (event, d) => {
-        if (!d.data.idea) this.toggleNode(d);
+        this.focusedNode = d;
+        if (!d.data.idea) {
+          this.toggleNode(d);
+        } else {
+          this.redrawFocusRing();
+        }
       });
 
     // Rectangle shape
@@ -760,7 +784,7 @@ export class IdeaGraphView {
   // ============================================================
 
   private toggleNode(d: HNode): void {
-    const isCollapsing = !!d.children;
+    const isExpanding = !!d._children;
     if (d.children) {
       d._children = d.children;
       d.children = undefined;
@@ -769,24 +793,14 @@ export class IdeaGraphView {
       d._children = undefined;
     }
     this.updateGraph(d);
+    this.focusedNode = d;
+    setTimeout(() => this.redrawFocusRing(), 530);
 
-    // Auto-pan AFTER D3 node animation finishes (duration = 500ms)
-    // Using transition end for precise chaining
-    const nodeAnimDuration = 500;
-    setTimeout(() => {
-      if (isCollapsing) {
-        // Collapsing: pan so the parent is on the left, collapsed node visible to the right
-        const parent = d.parent as HNode | undefined;
-        if (parent) {
-          this.panNodeToLeft(parent);
-        } else {
-          this.panNodeToLeft(d);
-        }
-      } else {
-        // Expanding: pan so expanded node (d) is on the left, children appear to the right
-        this.panNodeToLeft(d);
-      }
-    }, nodeAnimDuration + 30); // small buffer after D3 transition
+    // Auto-pan only on expand: node moves to left, children visible to the right
+    if (isExpanding) {
+      setTimeout(() => this.panNodeToLeft(d), 530);
+    }
+    // Collapsing: no pan animation
   }
 
   expandAll(): void {
@@ -955,6 +969,200 @@ export class IdeaGraphView {
     if (parent) {
       this.panNodeToLeft(parent);
     }
+  }
+
+  // ============================================================
+  // Keyboard Navigation
+  // ============================================================
+
+  private handleKeyDown(e: KeyboardEvent): void {
+    if (!this.root || !this.focusedNode) return;
+
+    switch (e.key) {
+      case 'ArrowUp':
+        e.preventDefault();
+        this.navigateVertical(-1);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        this.navigateVertical(1);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        this.navigateRight();
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        this.navigateLeft();
+        break;
+      case ' ':
+        e.preventDefault();
+        if (!this.focusedNode.data.idea) {
+          this.toggleNode(this.focusedNode);
+        }
+        break;
+    }
+  }
+
+  /** Navigate up (direction=-1) or down (direction=+1) among siblings. */
+  private navigateVertical(direction: -1 | 1): void {
+    const d = this.focusedNode;
+    if (!d) return;
+
+    const siblings = this.getVisibleSiblings(d);
+    const idx = siblings.indexOf(d);
+    if (idx < 0) return;
+
+    const nextIdx = idx + direction;
+    if (nextIdx >= 0 && nextIdx < siblings.length) {
+      this.setFocus(siblings[nextIdx]);
+    }
+  }
+
+  /** Right arrow: expand collapsed children + focus first child, or just focus first child if already expanded. */
+  private navigateRight(): void {
+    const d = this.focusedNode;
+    if (!d) return;
+
+    if (d._children) {
+      // Has collapsed children → expand + pan + focus first child
+      d.children = d._children;
+      d._children = undefined;
+      this.updateGraph(d);
+
+      setTimeout(() => {
+        this.panNodeToLeft(d);
+        const firstChild = d.children?.[0] as HNode | undefined;
+        if (firstChild) {
+          this.focusedNode = firstChild;
+          this.redrawFocusRing();
+        }
+      }, 530);
+    } else if (d.children?.[0]) {
+      // Already expanded → just focus first child
+      this.setFocus(d.children[0] as HNode);
+    }
+  }
+
+  /** Left arrow: collapse if expanded (keep focus), or move to parent if leaf/collapsed. */
+  private navigateLeft(): void {
+    const d = this.focusedNode;
+    if (!d) return;
+
+    if (d.children) {
+      // Has expanded children → collapse, keep focus on this node
+      d._children = d.children;
+      d.children = undefined;
+      this.updateGraph(d);
+      // Keep focusedNode = d (already set)
+      setTimeout(() => this.redrawFocusRing(), 530);
+      // No pan on collapse
+    } else {
+      // No children (leaf or already collapsed) → move focus to parent
+      const parent = d.parent as HNode | undefined;
+      if (parent) {
+        this.setFocus(parent);
+      }
+    }
+  }
+
+  /** Get visible siblings of a node (nodes at the same level, under the same parent). */
+  private getVisibleSiblings(node: HNode): HNode[] {
+    const parent = node.parent as HNode | undefined;
+    if (!parent) {
+      // Root level
+      if (this.root && this.root.children) {
+        return this.root.children as HNode[];
+      }
+      return this.root ? [this.root] : [node];
+    }
+    return (parent.children || []) as HNode[];
+  }
+
+  /** Set focus on a node, redraw ring, pan if needed. */
+  private setFocus(node: HNode): void {
+    this.focusedNode = node;
+    setTimeout(() => this.redrawFocusRing(), 30);
+    this.panToMakeNodeVisible(node);
+  }
+
+  // ============================================================
+  // Focus ring
+  // ============================================================
+
+  private redrawFocusRing(): void {
+    if (!this.gMain || !this.root) return;
+
+    this.gMain.selectAll('.focus-ring').remove();
+
+    const d = this.focusedNode;
+    if (!d || !this.isNodeInVisibleTree(d)) return;
+
+    const rw = getRectW(d);
+    const rh = getRectH(d);
+
+    this.gMain.append('rect')
+      .attr('class', 'focus-ring')
+      .attr('x', d.y - rw / 2 - 4)
+      .attr('y', d.x - rh / 2 - 4)
+      .attr('width', rw + 8)
+      .attr('height', rh + 8)
+      .attr('rx', getRx(d) + 2)
+      .attr('ry', getRx(d) + 2)
+      .attr('fill', 'none')
+      .attr('stroke', '#3b82f6')
+      .attr('stroke-width', 2.5)
+      .attr('pointer-events', 'none');
+  }
+
+  /** Check if a node is in the currently visible tree (all ancestors expanded). */
+  private isNodeInVisibleTree(node: HNode): boolean {
+    let current = node.parent as HNode | undefined;
+    while (current) {
+      if (!current.children) return false; // ancestor is collapsed
+      current = current.parent as HNode | undefined;
+    }
+    return true;
+  }
+
+  // ============================================================
+  // Pan to make node visible
+  // ============================================================
+
+  /** Pan the view so the given node is visible in the viewport. No-op if already visible. */
+  private panToMakeNodeVisible(node: HNode): void {
+    if (!this.svg || !this.zoomBehavior || !this.gMain) return;
+    if (node.x == null || node.y == null) return;
+
+    const svgEl = this.svg.node()!;
+    const transform = d3.zoomTransform(svgEl);
+    const scale = transform.k;
+
+    // Node center in screen coordinates
+    const nodeScreenX = node.y * scale + transform.x;
+    const nodeScreenY = node.x * scale + transform.y;
+
+    const rw = getRectW(node) * scale;
+    const rh = getRectH(node) * scale;
+    const margin = 60;
+
+    // Check if node is within viewport (with margin)
+    const inView =
+      nodeScreenX - rw / 2 >= margin &&
+      nodeScreenX + rw / 2 <= this.width - margin &&
+      nodeScreenY - rh / 2 >= margin &&
+      nodeScreenY + rh / 2 <= this.height - margin;
+
+    if (inView) return;
+
+    // Pan to center the node in viewport
+    const tx = this.width / 2 - node.y * scale;
+    const ty = this.height / 2 - node.x * scale;
+
+    this.svg.transition().duration(300).ease(d3.easeCubicOut).call(
+      this.zoomBehavior.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(scale),
+    );
   }
 
   private bindEvents(): void {

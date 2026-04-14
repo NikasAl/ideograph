@@ -197,6 +197,17 @@
   pointer-events: none;
 }
 
+/* ---- Focus ring (keyboard navigation) ---- */
+
+.focus-ring {
+  animation: focus-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes focus-pulse {
+  0%, 100% { opacity: 0.65; stroke-width: 2.5px; }
+  50% { opacity: 1; stroke-width: 3px; }
+}
+
 
 
 /* ---- Tooltip ---- */
