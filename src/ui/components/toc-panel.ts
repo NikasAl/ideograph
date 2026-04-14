@@ -760,13 +760,21 @@ export class TOCPanel {
     const fill = this.container.querySelector('#toc-progress-fill') as HTMLElement;
     const text = this.container.querySelector('#toc-progress-text') as HTMLElement;
 
-    if (progress && fill && text) {
-      progress.style.display = 'block';
-      // Force reflow to ensure transition triggers when going from hidden
+    if (!progress || !fill || !text) return;
+
+    const wasHidden = progress.style.display === 'none' || !progress.style.display;
+    progress.style.display = 'block';
+
+    if (wasHidden) {
+      // Disable transition, reset to 0, force reflow, then re-enable transition
+      fill.style.transition = 'none';
+      fill.style.width = '0%';
       void fill.offsetWidth;
-      fill.style.width = `${pct}%`;
-      text.textContent = msg;
+      fill.style.transition = '';
     }
+
+    fill.style.width = `${pct}%`;
+    text.textContent = msg;
   }
 
   private hideProgress(): void {

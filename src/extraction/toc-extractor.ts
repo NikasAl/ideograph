@@ -335,6 +335,7 @@ async function extractTOCOcr(opts: {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.warn(`[TOC] OCR page ${p} failed: ${errMsg}`);
+      onProgress?.(`OCR страницы ${p} — ошибка, пробуем дальше...`, pct);
       pageMarkdowns.push({ page: p, markdown: '' });
     }
   }
@@ -409,6 +410,7 @@ async function extractTOCVlm(opts: {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.warn(`[TOC] VLM page ${p} failed: ${errMsg}`);
+      onProgress?.(`VLM страница ${p} — ошибка, пробуем дальше...`, pct);
     }
   }
 

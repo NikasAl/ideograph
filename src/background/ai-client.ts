@@ -34,7 +34,7 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
-  /** Max retry attempts per model before moving to next (default: 2) */
+  /** Max retry attempts per model before moving to next (default: 5 = 6 total attempts) */
   retriesPerModel?: number;
 }
 
@@ -79,6 +79,11 @@ function isFallbackError(err: unknown): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Jitter: random 0–30% of delay to avoid thundering herd */
+function jitteredDelay(baseMs: number): number {
+  return Math.round(baseMs * (1 + Math.random() * 0.3));
 }
 
 // ============================================================
@@ -130,7 +135,7 @@ export class OpenRouterProvider implements AIProvider {
     isVision: boolean,
   ): Promise<ChatResponse> {
     const models = buildModelList(options?.model, options?.fallbackModels);
-    const maxRetries = options?.retriesPerModel ?? 2;
+    const maxRetries = options?.retriesPerModel ?? 5;
     const errors: string[] = [];
 
     for (const model of models) {
@@ -152,8 +157,8 @@ export class OpenRouterProvider implements AIProvider {
           }
 
           if (isRetryableError(err) && attempt < maxRetries) {
-            // Transient error — retry with exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+            // Exponential backoff: 2s→4s→8s→16s→32s, max 60s, with jitter
+            const delay = Math.min(jitteredDelay(2000 * Math.pow(2, attempt)), 60000);
             console.warn(`[AI] Retrying ${model} in ${delay}ms...`);
             await sleep(delay);
             continue;
@@ -267,7 +272,7 @@ export class ZAIProvider implements AIProvider {
     isVision: boolean,
   ): Promise<ChatResponse> {
     const models = buildModelList(options?.model, options?.fallbackModels);
-    const maxRetries = options?.retriesPerModel ?? 2;
+    const maxRetries = options?.retriesPerModel ?? 5;
     const errors: string[] = [];
 
     for (const model of models) {
@@ -288,7 +293,8 @@ export class ZAIProvider implements AIProvider {
           }
 
           if (isRetryableError(err) && attempt < maxRetries) {
-            const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+            // Exponential backoff: 2s→4s→8s→16s→32s, max 60s, with jitter
+            const delay = Math.min(jitteredDelay(2000 * Math.pow(2, attempt)), 60000);
             console.warn(`[z-ai] Retrying ${model} in ${delay}ms...`);
             await sleep(delay);
             continue;
