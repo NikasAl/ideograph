@@ -7,7 +7,7 @@ import type { TOCEntry, Book, ExtractionMode } from '../../db/schema.js';
 import { EXTRACTION_MODES } from '../../db/schema.js';
 import { getSettings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
-import { extractTOC, extractTOCFromOutline, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
+import { extractTOC, extractTOCFromOutline, summarizeTOCChapters, computePageRanges, computeIdeasCounts } from '../../extraction/toc-extractor.js';
 import { ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 import { openInZathura } from '../utils/native-messaging.js';
 import '../../ui/styles/components/toc-panel.css';
@@ -57,6 +57,13 @@ export class TOCPanel {
       return;
     }
     this.toc = this.book.tableOfContents || [];
+
+    // Recompute idea counts from DB (handles books analyzed before the fix)
+    if (this.toc.length > 0) {
+      const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
+      this.toc = computeIdeasCounts(this.toc, allIdeas, this.book.pageOffset || 0);
+    }
+
     this.loadCollapsedState();
 
     this.container.innerHTML = `

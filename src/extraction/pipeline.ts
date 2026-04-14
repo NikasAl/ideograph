@@ -17,7 +17,7 @@ import { buildVisionMessage } from './vlm-extractor.js';
 import { EXTRACT_IDEAS_SYSTEM, extractIdeasUserText, extractIdeasUserVision, DETAIL_INSTRUCTIONS } from './prompts/extract-ideas.js';
 import { BUILD_RELATIONS_SYSTEM, buildRelationsUser } from './prompts/build-relations.js';
 import { OCR_TO_MARKDOWN_SYSTEM, ocrPageUserPrompt } from './prompts/ocr-to-markdown.js';
-import { findChapterForPage, assignChapterIds } from './toc-extractor.js';
+import { findChapterForPage, assignChapterIds, computeIdeasCounts } from './toc-extractor.js';
 import { chapterContextBlock } from './prompts/toc-prompts.js';
 
 function sleep(ms: number): Promise<void> {
@@ -435,9 +435,17 @@ async function finalizeIdeas(opts: {
   onProgress?.('Сохранение...', 95);
   await db.ideas.bulkPut(ideas);
   if (currentBook) {
+    // Recompute idea counts for every TOC entry and persist
+    let updatedToc = chapterToc;
+    if (chapterToc.length > 0) {
+      const allBookIdeas = await db.ideas.where('bookId').equals(bookId).toArray();
+      updatedToc = computeIdeasCounts(chapterToc, allBookIdeas, pageOffset);
+    }
+
     await db.books.update(bookId, {
       lastAnalyzedPage: Math.max(currentBook.lastAnalyzedPage, pageTo),
       extractionMode: qualityReport.suggestedMode,
+      tableOfContents: updatedToc,
       updatedAt: Date.now(),
     });
   }

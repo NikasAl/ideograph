@@ -572,6 +572,74 @@ export function assignChapterIds(ideas: Array<{ id: string; pages: number[]; cha
 }
 
 /**
+ * Compute ideasCount for every TOC entry based on actual ideas in the DB.
+ *
+ * Each idea is assigned to the **most specific** (deepest level) TOC entry
+ * whose page range contains the idea's first book-page.
+ * Parent entries get the **recursive sum** of all descendant counts.
+ *
+ * Returns a new TOCEntry[] array with updated ideasCount values.
+ */
+export function computeIdeasCounts(
+  toc: TOCEntry[],
+  ideas: Array<{ pages: number[] }>,
+  pageOffset: number,
+): TOCEntry[] {
+  if (toc.length === 0 || ideas.length === 0) {
+    return toc.map(e => ({ ...e, ideasCount: 0 }));
+  }
+
+  // 1. Assign each idea to the most specific TOC entry (deepest level)
+  const directCount = new Map<string, number>();
+
+  for (const idea of ideas) {
+    const bookPage = (idea.pages[0] || 1) - pageOffset;
+
+    let bestEntry: TOCEntry | undefined;
+    let bestLevel = 0;
+
+    for (const entry of toc) {
+      if (
+        entry.pageEnd !== undefined &&
+        bookPage >= entry.page &&
+        bookPage <= entry.pageEnd
+      ) {
+        if (entry.level > bestLevel) {
+          bestEntry = entry;
+          bestLevel = entry.level;
+        }
+      }
+    }
+
+    if (bestEntry) {
+      directCount.set(bestEntry.id, (directCount.get(bestEntry.id) || 0) + 1);
+    }
+  }
+
+  // 2. For each entry, compute total = direct + recursive children
+  const memo = new Map<string, number>();
+
+  function subtreeTotal(entryId: string): number {
+    if (memo.has(entryId)) return memo.get(entryId)!;
+    const direct = directCount.get(entryId) || 0;
+    let childrenSum = 0;
+    for (const e of toc) {
+      if (e.parentId === entryId) {
+        childrenSum += subtreeTotal(e.id);
+      }
+    }
+    const total = direct + childrenSum;
+    memo.set(entryId, total);
+    return total;
+  }
+
+  return toc.map(entry => ({
+    ...entry,
+    ideasCount: subtreeTotal(entry.id),
+  }));
+}
+
+/**
  * Get the chapter context string for injection into idea extraction prompts.
  */
 export function getChapterContext(pageFrom: number, toc: TOCEntry[]): string | null {
