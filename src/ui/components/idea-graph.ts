@@ -978,6 +978,10 @@ export class IdeaGraphView {
   private handleKeyDown(e: KeyboardEvent): void {
     if (!this.root || !this.focusedNode) return;
 
+    // Skip keyboard navigation when user is typing in form elements
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
+
     switch (e.key) {
       case 'ArrowUp':
         e.preventDefault();

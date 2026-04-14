@@ -3,7 +3,7 @@
 // ============================================================
 
 import { db } from '../../db/index.js';
-import type { Idea, Familiarity, IdeaStatus } from '../../db/schema.js';
+import type { Idea, Familiarity, IdeaStatus, TOCEntry } from '../../db/schema.js';
 import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
@@ -43,6 +43,8 @@ export class IdeaListView {
     const allIdeas = await db.ideas.where('bookId').equals(this.bookId).toArray();
     // Re-compute chapterIds with current pageOffset so chapter filter works correctly
     assignChapterIds(allIdeas, toc, pageOffset);
+    // Build TOC path lookup for each idea
+    const tocPaths = this.buildTocPaths(allIdeas, toc, pageOffset);
     const ideas = this.applyFilters(allIdeas);
 
     const chapterOptions = chapters.length > 0
@@ -90,14 +92,17 @@ export class IdeaListView {
           ${ideas.length === 0 ? `
             <div class="empty-state"><div class="empty-icon">◇</div>
             <p>Идеи ещё не извлечены</p><p class="empty-hint">Нажмите «Анализировать»</p></div>
-          ` : ideas.map((i) => this.card(i)).join('')}
+          ` : ideas.map((i) => this.card(i, tocPaths.get(i.id) || null)).join('')}
         </div>
       </div>`;
 
     this.bind();
   }
 
-  private card(i: Idea): string {
+  private card(i: Idea, tocPath: TOCEntry[] | null): string {
+    const tocBreadcrumb = tocPath && tocPath.length > 0
+      ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.esc(e.title)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
+      : '';
     return `
       <div class="idea-card ${STAT_COLORS[i.status]}" data-idea-id="${i.id}">
         <div class="idea-card-header">
@@ -105,6 +110,7 @@ export class IdeaListView {
           <span class="idea-depth-badge depth-${i.depth}">${DEPTH_LABELS[i.depth]}</span>
           <span class="idea-importance">⭐ ${'★'.repeat(i.importance)}${'☆'.repeat(5 - i.importance)}</span>
         </div>
+        ${tocBreadcrumb}
         <h3 class="idea-title">${this.esc(i.title)}</h3>
         <p class="idea-summary">${this.esc(i.summary)}</p>
         ${i.quote ? `<blockquote class="idea-quote">${this.esc(i.quote)}</blockquote>` : ''}
@@ -138,9 +144,15 @@ export class IdeaListView {
             `).join('')}
           </div>
         </div>
-        <div class="idea-notes">
-          <label>_ Заметки:</label>
-          <textarea class="notes-textarea" data-idea-id="${i.id}" placeholder="Ваши заметки...">${this.esc(i.notes)}</textarea>
+        <div class="idea-notes" id="notes-${i.id}">
+          <div class="notes-toggle" data-notes-id="${i.id}">
+            <span class="notes-toggle-icon">▶</span>
+            <label>_ Заметки</label>
+            ${i.notes ? '<span class="notes-has-content"></span>' : ''}
+          </div>
+          <div class="notes-body" style="display:none">
+            <textarea class="notes-textarea" data-idea-id="${i.id}" placeholder="Ваши заметки...">${this.esc(i.notes)}</textarea>
+          </div>
         </div>
         ${i.userTags?.length ? `<div class="idea-tags">${i.userTags.map(t => `<span class="tag">${this.esc(t)}</span>`).join('')}</div>` : ''}
         <div class="idea-card-footer">
@@ -167,12 +179,31 @@ export class IdeaListView {
 
     this.container.querySelectorAll('.notes-textarea').forEach(ta => {
       let timer: ReturnType<typeof setTimeout>;
+      // Prevent any parent keydown handler from eating space/keys in textarea
+      ta.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+      });
       ta.addEventListener('input', () => {
         clearTimeout(timer);
         timer = setTimeout(async () => {
           const id = (ta as HTMLElement).dataset.ideaId;
           if (id) await db.ideas.update(id, { notes: (ta as HTMLTextAreaElement).value });
         }, 500);
+      });
+    });
+
+    // Notes toggle — expand/collapse notes editor
+    this.container.querySelectorAll('.notes-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const notesId = (toggle as HTMLElement).dataset.notesId;
+        const notesEl = document.getElementById(`notes-${notesId}`);
+        if (!notesEl) return;
+        const body = notesEl.querySelector('.notes-body') as HTMLElement | null;
+        const icon = notesEl.querySelector('.notes-toggle-icon');
+        if (!body) return;
+        const isVisible = body.style.display !== 'none';
+        body.style.display = isVisible ? 'none' : 'block';
+        if (icon) icon.textContent = isVisible ? '▶' : '▼';
       });
     });
 
@@ -322,6 +353,51 @@ export class IdeaListView {
       if (this.filters.chapter !== 'all' && i.chapterId !== this.filters.chapter) return false;
       return true;
     });
+  }
+
+  /**
+   * For each idea, find the most specific TOC entry (deepest level) whose
+   * page range contains the idea's first book-page, then build the full
+   * path from root chapter down to that entry.
+   */
+  private buildTocPaths(ideas: Idea[], toc: TOCEntry[], pageOffset: number): Map<string, TOCEntry[]> {
+    const paths = new Map<string, TOCEntry[]>();
+    if (toc.length === 0) return paths;
+
+    // Build parent lookup for path reconstruction
+    const byId = new Map<string, TOCEntry>();
+    for (const e of toc) byId.set(e.id, e);
+
+    function getPath(entry: TOCEntry): TOCEntry[] {
+      const path: TOCEntry[] = [];
+      let cur: TOCEntry | undefined = entry;
+      while (cur) {
+        path.unshift(cur);
+        cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+      }
+      return path;
+    }
+
+    for (const idea of ideas) {
+      const bookPage = (idea.pages[0] || 1) - pageOffset;
+      let best: TOCEntry | undefined;
+      for (const entry of toc) {
+        if (
+          entry.pageEnd !== undefined &&
+          bookPage >= entry.page &&
+          bookPage <= entry.pageEnd
+        ) {
+          if (!best || entry.level > best.level) {
+            best = entry;
+          }
+        }
+      }
+      if (best) {
+        paths.set(idea.id, getPath(best));
+      }
+    }
+
+    return paths;
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
