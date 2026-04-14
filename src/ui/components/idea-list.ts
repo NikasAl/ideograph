@@ -60,6 +60,9 @@ export class IdeaListView {
     const ideas = this.applyFilters(allIdeas, tocPaths);
 
     this.tocEntries = toc;
+    // Pre-load which ideas have saved chats (for dot indicator on initial render)
+    const allChatRecords = await db.ideaChats.where('ideaId').anyOf(ideas.map(i => i.id)).toArray();
+    const ideasWithChats = new Set(allChatRecords.filter(r => r.messages.length > 0).map(r => r.ideaId));
     const allSections = toc.length > 0
       ? `<select id="filter-chapter" class="filter-select">
           <option value="all"${this.filters.chapter === 'all' ? ' selected' : ''}>Все разделы</option>
@@ -109,14 +112,14 @@ export class IdeaListView {
           ${ideas.length === 0 ? `
             <div class="empty-state"><div class="empty-icon">◇</div>
             <p>Идеи ещё не извлечены</p><p class="empty-hint">Нажмите «Анализировать»</p></div>
-          ` : ideas.map((i) => this.card(i, tocPaths.get(i.id) || null)).join('')}
+          ` : ideas.map((i) => this.card(i, tocPaths.get(i.id) || null, ideasWithChats.has(i.id))).join('')}
         </div>
       </div>`;
 
     this.bind();
   }
 
-  private card(i: Idea, tocPath: TOCEntry[] | null): string {
+  private card(i: Idea, tocPath: TOCEntry[] | null, hasChat: boolean): string {
     const tocBreadcrumb = tocPath && tocPath.length > 0
       ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.renderMarkdown(e.title, false)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
       : '';
@@ -177,7 +180,7 @@ export class IdeaListView {
           <div class="chat-toggle" data-chat-id="${i.id}">
             <span class="chat-toggle-icon">▶</span>
             <label>_ Чат с ИИ</label>
-            ${this.chatHistories.has(i.id) && this.chatHistories.get(i.id)!.length > 0 ? '<span class="chat-has-messages"></span>' : ''}
+            ${hasChat ? '<span class="chat-has-messages"></span>' : ''}
           </div>
           <div class="chat-body" style="display:none">
             <div class="chat-messages" id="chat-messages-${i.id}"></div>
