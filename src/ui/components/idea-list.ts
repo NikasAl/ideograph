@@ -28,6 +28,7 @@ export class IdeaListView {
   private bookId: string;
   private bookFilePath?: string;
   private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all', chapter: 'all' as string };
+  private tocEntries: TOCEntry[] = [];
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -47,10 +48,15 @@ export class IdeaListView {
     const tocPaths = this.buildTocPaths(allIdeas, toc, pageOffset);
     const ideas = this.applyFilters(allIdeas);
 
-    const chapterOptions = chapters.length > 0
+    this.tocEntries = toc;
+    const allSections = toc.length > 0
       ? `<select id="filter-chapter" class="filter-select">
-          <option value="all"${this.filters.chapter === 'all' ? ' selected' : ''}>Все главы</option>
-          ${chapters.map(ch => `<option value="${ch.id}"${this.filters.chapter === ch.id ? ' selected' : ''}>${this.esc(ch.title)}</option>`).join('')}
+          <option value="all"${this.filters.chapter === 'all' ? ' selected' : ''}>Все разделы</option>
+          ${toc.map(e => {
+            const indent = '  '.repeat(e.level - 1);
+            const prefix = e.level === 1 ? '' : (e.level === 2 ? '└ ' : '└ ');
+            return `<option value="${e.id}"${this.filters.chapter === e.id ? ' selected' : ''}>${indent}${prefix}${this.esc(e.title)}</option>`;
+          }).join('')}
         </select>`
       : '';
 
@@ -85,7 +91,7 @@ export class IdeaListView {
             <option value="example"${this.filters.type === 'example' ? ' selected' : ''}>Пример</option>
             <option value="analogy"${this.filters.type === 'analogy' ? ' selected' : ''}>Аналогия</option>
           </select>
-          ${chapterOptions}
+          ${allSections}
           <span class="idea-count">${ideas.length} / ${allIdeas.length}</span>
         </div>
         <div class="ideas-container">
@@ -108,7 +114,9 @@ export class IdeaListView {
         <div class="idea-card-header">
           <span class="idea-type-icon">${TYPE_ICONS[i.type] || '◇'}</span>
           <span class="idea-depth-badge depth-${i.depth}">${DEPTH_LABELS[i.depth]}</span>
-          <span class="idea-importance">⭐ ${'★'.repeat(i.importance)}${'☆'.repeat(5 - i.importance)}</span>
+          <span class="idea-star-rating" data-idea-id="${i.id}">
+            ${[1,2,3,4,5].map(s => `<span class="star-btn${s <= i.importance ? ' star-filled' : ''}" data-star="${s}">&#9733;</span>`).join('')}
+          </span>
         </div>
         ${tocBreadcrumb}
         <h3 class="idea-title">${this.esc(i.title)}</h3>
@@ -167,6 +175,33 @@ export class IdeaListView {
     document.getElementById('filter-stat')?.addEventListener('change', (e) => { this.filters.status = (e.target as HTMLSelectElement).value as typeof this.filters.status; rerender(); });
     document.getElementById('filter-type')?.addEventListener('change', (e) => { this.filters.type = (e.target as HTMLSelectElement).value as typeof this.filters.type; rerender(); });
     document.getElementById('filter-chapter')?.addEventListener('change', (e) => { this.filters.chapter = (e.target as HTMLSelectElement).value; rerender(); });
+
+    // Star rating — click to set importance
+    this.container.querySelectorAll('.idea-star-rating').forEach(rating => {
+      const stars = rating.querySelectorAll('.star-btn');
+      const handleStar = async (target: HTMLElement) => {
+        const val = parseInt(target.dataset.star || '0', 10);
+        if (val < 1 || val > 5) return;
+        const ideaId = (rating as HTMLElement).dataset.ideaId;
+        if (!ideaId) return;
+        await db.ideas.update(ideaId, { importance: val as Idea['importance'] });
+        rerender();
+      };
+      stars.forEach(star => {
+        star.addEventListener('click', () => handleStar(star as HTMLElement));
+        // Hover preview
+        star.addEventListener('mouseenter', () => {
+          const val = parseInt((star as HTMLElement).dataset.star || '0', 10);
+          stars.forEach(s => {
+            const sv = parseInt((s as HTMLElement).dataset.star || '0', 10);
+            s.classList.toggle('star-hover', sv <= val);
+          });
+        });
+      });
+      rating.addEventListener('mouseleave', () => {
+        stars.forEach(s => s.classList.remove('star-hover'));
+      });
+    });
 
     this.container.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -346,13 +381,32 @@ export class IdeaListView {
   }
 
   private applyFilters(ideas: Idea[]): Idea[] {
+    // Build a set of selected TOC entry IDs (selected + all descendants)
+    const selectedTocIds = this.getSelectedTocIds();
     return ideas.filter(i => {
       if (this.filters.familiarity !== 'all' && i.familiarity !== this.filters.familiarity) return false;
       if (this.filters.status !== 'all' && i.status !== this.filters.status) return false;
       if (this.filters.type !== 'all' && i.type !== this.filters.type) return false;
-      if (this.filters.chapter !== 'all' && i.chapterId !== this.filters.chapter) return false;
+      if (selectedTocIds.size > 0 && !selectedTocIds.has(i.chapterId || '')) return false;
       return true;
     });
+  }
+
+  /**
+   * When a TOC section is selected, include it AND all its descendant sections
+   * so filtering by a chapter also shows ideas in its sub-sections.
+   */
+  private getSelectedTocIds(): Set<string> {
+    if (this.filters.chapter === 'all') return new Set();
+    const ids = new Set<string>();
+    const addDescendants = (parentId: string) => {
+      ids.add(parentId);
+      for (const e of this.tocEntries) {
+        if (e.parentId === parentId) addDescendants(e.id);
+      }
+    };
+    addDescendants(this.filters.chapter);
+    return ids;
   }
 
   /**
