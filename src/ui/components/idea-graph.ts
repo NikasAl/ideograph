@@ -1025,19 +1025,28 @@ export class IdeaGraphView {
     if (!d) return;
 
     if (d._children) {
-      // Has collapsed children → expand + pan + focus first child
+      // Has collapsed children → expand + pan to parent + then focus first child
       d.children = d._children;
       d._children = undefined;
       this.updateGraph(d);
 
+      const treeAnimMs = 500;
+      const panToParentMs = 600;
+
+      // Step 1: after tree animation finishes, pan parent to the left
       setTimeout(() => {
         this.panNodeToLeft(d);
-        const firstChild = d.children?.[0] as HNode | undefined;
-        if (firstChild) {
-          this.focusedNode = firstChild;
-          this.redrawFocusRing();
-        }
-      }, 530);
+
+        // Step 2: after pan-to-parent finishes, focus first child and pan to it
+        setTimeout(() => {
+          const firstChild = d.children?.[0] as HNode | undefined;
+          if (firstChild) {
+            this.focusedNode = firstChild;
+            this.redrawFocusRing();
+            this.panToMakeNodeVisible(firstChild);
+          }
+        }, panToParentMs + 60);
+      }, treeAnimMs + 40);
     } else if (d.children?.[0]) {
       // Already expanded → just focus first child
       this.setFocus(d.children[0] as HNode);
@@ -1159,7 +1168,7 @@ export class IdeaGraphView {
     const tx = this.width / 2 - node.y * scale;
     const ty = this.height / 2 - node.x * scale;
 
-    this.svg.transition().duration(300).ease(d3.easeCubicOut).call(
+    this.svg.transition().duration(500).ease(d3.easeCubicInOut).call(
       this.zoomBehavior.transform,
       d3.zoomIdentity.translate(tx, ty).scale(scale),
     );
