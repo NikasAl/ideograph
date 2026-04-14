@@ -2,8 +2,10 @@
 // Idea List View — cards with extracted ideas and filters
 // ============================================================
 
-import { db } from '../../db/index.js';
+import { db, getSettings } from '../../db/index.js';
 import type { Idea, Familiarity, IdeaStatus, TOCEntry } from '../../db/schema.js';
+import type { ChatMessage } from '../../background/ai-client.js';
+import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
@@ -31,6 +33,10 @@ export class IdeaListView {
   private bookFilePath?: string;
   private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all', chapter: 'all' as string };
   private tocEntries: TOCEntry[] = [];
+  /** Per-idea chat history (user + assistant messages) */
+  private chatHistories = new Map<string, ChatMessage[]>();
+  /** System prompts built per idea (cached) */
+  private chatSystemPrompts = new Map<string, string>();
 
   constructor(container: HTMLElement, bookId: string) {
     this.container = container;
@@ -164,6 +170,22 @@ export class IdeaListView {
             <textarea class="notes-textarea" data-idea-id="${i.id}" placeholder="Ваши заметки...">${this.esc(i.notes)}</textarea>
           </div>
         </div>
+        <div class="idea-chat" id="chat-${i.id}">
+          <div class="chat-toggle" data-chat-id="${i.id}">
+            <span class="chat-toggle-icon">▶</span>
+            <label>_ Чат с ИИ</label>
+            ${this.chatHistories.has(i.id) && this.chatHistories.get(i.id)!.length > 0 ? '<span class="chat-has-messages"></span>' : ''}
+          </div>
+          <div class="chat-body" style="display:none">
+            <div class="chat-messages" id="chat-messages-${i.id}"></div>
+            <div class="chat-input-row">
+              <textarea class="chat-input" data-chat-id="${i.id}" placeholder="Задайте вопрос об этой идее..." rows="1"></textarea>
+              <button class="chat-send-btn" data-chat-id="${i.id}" title="Отправить">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
         ${i.userTags?.length ? `<div class="idea-tags">${i.userTags.map(t => `<span class="tag">${this.esc(t)}</span>`).join('')}</div>` : ''}
         <div class="idea-card-footer">
           <button class="btn-delete-idea" data-idea-id="${i.id}" title="Удалить идею">x Удалить</button>
@@ -241,6 +263,47 @@ export class IdeaListView {
         const isVisible = body.style.display !== 'none';
         body.style.display = isVisible ? 'none' : 'block';
         if (icon) icon.textContent = isVisible ? '▶' : '▼';
+      });
+    });
+
+    // Chat toggle — expand/collapse chat panel
+    this.container.querySelectorAll('.chat-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const chatId = (toggle as HTMLElement).dataset.chatId;
+        const chatEl = document.getElementById(`chat-${chatId}`);
+        if (!chatEl) return;
+        const body = chatEl.querySelector('.chat-body') as HTMLElement | null;
+        const icon = chatEl.querySelector('.chat-toggle-icon');
+        if (!body) return;
+        const isVisible = body.style.display !== 'none';
+        body.style.display = isVisible ? 'none' : 'block';
+        if (icon) icon.textContent = isVisible ? '▶' : '▼';
+        // When opening, restore messages and focus input
+        if (!isVisible) {
+          this.restoreChatMessages(chatId!);
+          const input = body.querySelector('.chat-input') as HTMLTextAreaElement | null;
+          if (input) input.focus();
+        }
+      });
+    });
+
+    // Chat input — Enter to send, Shift+Enter for newline
+    this.container.querySelectorAll<HTMLTextAreaElement>('.chat-input').forEach(input => {
+      input.addEventListener('keydown', (e: KeyboardEvent) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          const chatId = (input as HTMLElement).dataset.chatId;
+          if (chatId) this.sendChatMessage(chatId);
+        }
+      });
+    });
+
+    // Chat send button
+    this.container.querySelectorAll('.chat-send-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const chatId = (btn as HTMLElement).dataset.chatId;
+        if (chatId) this.sendChatMessage(chatId);
       });
     });
 
@@ -458,6 +521,188 @@ export class IdeaListView {
     }
 
     return paths;
+  }
+
+  /**
+   * Restore previously rendered chat messages when chat panel is opened.
+   */
+  private restoreChatMessages(ideaId: string): void {
+    const messagesEl = document.getElementById(`chat-messages-${ideaId}`);
+    if (!messagesEl) return;
+    const history = this.chatHistories.get(ideaId);
+    if (!history || history.length === 0) {
+      messagesEl.innerHTML = '<div class="chat-empty">Задайте вопрос об этой идее. Контекст идеи и страницы книги будет отправлен автоматически.</div>';
+      return;
+    }
+    messagesEl.innerHTML = history.map(m =>
+      `<div class="chat-msg chat-msg-${m.role}">${m.role === 'user' ? this.esc(m.content) : this.renderMath(m.content)}</div>`
+    ).join('');
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  /**
+   * Build a system prompt containing the idea's content and page context.
+   * Cached per idea to avoid re-reading pageCache on every message.
+   */
+  private async buildSystemPrompt(idea: Idea): Promise<string> {
+    const cached = this.chatSystemPrompts.get(idea.id);
+    if (cached) return cached;
+
+    // Gather page context texts
+    const pageTexts: string[] = [];
+    for (const p of idea.pages) {
+      const entry = await db.pageCache.where({ bookId: this.bookId, pageNumber: p }).first();
+      if (!entry) continue;
+      if (entry.ocrMarkdown) {
+        pageTexts.push(`--- Страница ${p} (OCR) ---\n${entry.ocrMarkdown}`);
+      } else if (entry.hasTextLayer && (entry.qualityScore ?? 0) >= 0.3) {
+        pageTexts.push(`--- Страница ${p} (текстовый слой) ---\n${entry.text}`);
+      }
+    }
+
+    let prompt = `Ты — помощник по изучению учебного материала. Отвечай на вопросы пользователя об конкретной идее из книги.\n\n`;
+    prompt += `=== ИДЕЯ ===\n`;
+    prompt += `Заголовок: ${idea.title}\n`;
+    prompt += `Тип: ${idea.type}\n`;
+    prompt += `Глубина: ${idea.depth}\n`;
+    prompt += `Суть: ${idea.summary}\n`;
+    if (idea.quote) prompt += `Цитата: ${idea.quote}\n`;
+    prompt += `Страницы: ${idea.pages.join(', ')}\n`;
+    if (idea.relations.length > 0) prompt += `Связи: ${idea.relations.length} шт.\n`;
+
+    if (pageTexts.length > 0) {
+      prompt += `\n=== КОНТЕКСТ СТРАНИЦ ===\n`;
+      prompt += pageTexts.join('\n\n');
+    }
+
+    prompt += `\n\nИнструкции:\n`;
+    prompt += `- Отвечай на русском языке\n`;
+    prompt += `- Используй формулы LaTeX: строчные $...$ и блочные $$...$$\n`;
+    prompt += `- Если в тексте есть формулы LaTeX, сохраняй их в ответах\n`;
+    prompt += `- Будь лаконичным но информативным\n`;
+    prompt += `- Если вопрос не связан с идеей, мягко направь к теме`;
+
+    this.chatSystemPrompts.set(idea.id, prompt);
+    return prompt;
+  }
+
+  /**
+   * Send user's question to LLM with idea context + chat history.
+   */
+  private async sendChatMessage(ideaId: string): Promise<void> {
+    const chatEl = document.getElementById(`chat-${ideaId}`);
+    if (!chatEl) return;
+    const messagesEl = document.getElementById(`chat-messages-${ideaId}`);
+    const input = chatEl.querySelector('.chat-input') as HTMLTextAreaElement | null;
+    if (!messagesEl || !input) return;
+
+    const userText = input.value.trim();
+    if (!userText) return;
+
+    // Get settings and create provider
+    let settings: Awaited<ReturnType<typeof getSettings>>;
+    try {
+      settings = await getSettings();
+    } catch {
+      this.appendChatMsg(messagesEl, 'system', 'Ошибка: не удалось загрузить настройки. Проверьте API ключ в настройках.');
+      return;
+    }
+    const apiKey = settings.providerKeys[settings.activeProvider];
+    if (!apiKey) {
+      this.appendChatMsg(messagesEl, 'system', `API ключ для "${settings.activeProvider}" не настроен. Откройте настройки.`);
+      return;
+    }
+
+    // Initialize history if needed
+    if (!this.chatHistories.has(ideaId)) {
+      this.chatHistories.set(ideaId, []);
+    }
+    const history = this.chatHistories.get(ideaId)!;
+
+    // Clear placeholder if present
+    const emptyEl = messagesEl.querySelector('.chat-empty');
+    if (emptyEl) emptyEl.remove();
+
+    // Show user message
+    history.push({ role: 'user', content: userText });
+    this.appendChatMsg(messagesEl, 'user', userText);
+    input.value = '';
+    input.style.height = 'auto';
+
+    // Show loading indicator
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'chat-msg chat-msg-assistant chat-loading';
+    loadingEl.innerHTML = '<span class="chat-loading-dots"><span>.</span><span>.</span><span>.</span></span>';
+    messagesEl.appendChild(loadingEl);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Disable input while processing
+    input.disabled = true;
+    const sendBtn = chatEl.querySelector('.chat-send-btn');
+    if (sendBtn) (sendBtn as HTMLElement).style.pointerEvents = 'none';
+
+    try {
+      // Build system prompt (cached)
+      const idea = await db.ideas.get(ideaId);
+      if (!idea) throw new Error('Идея не найдена');
+      const systemPrompt = await this.buildSystemPrompt(idea);
+
+      // Create provider
+      const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
+      const fallbackModels = parseFallbackModels(settings.fallbackModels);
+
+      // Build messages array: system + history
+      const messages: ChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...history,
+      ];
+
+      const response = await provider.chat(messages, {
+        model: settings.activeModel,
+        fallbackModels,
+        retriesPerModel: 1,
+      });
+
+      // Store and render assistant response
+      history.push({ role: 'assistant', content: response.content });
+      // Will be rendered in finally after loading is removed
+    } catch (err) {
+      const errMsg = String(err);
+      // Remove last user message from history on error so user can retry
+      history.pop();
+      this.appendChatMsg(messagesEl, 'system', `Ошибка: ${this.esc(errMsg.length > 200 ? errMsg.slice(0, 200) + '...' : errMsg)}`);
+    } finally {
+      // Remove loading indicator
+      loadingEl.remove();
+      // Render the last assistant response (if successful)
+      const lastMsg = history[history.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        this.appendChatMsg(messagesEl, 'assistant', lastMsg.content);
+      }
+      input.disabled = false;
+      if (sendBtn) (sendBtn as HTMLElement).style.pointerEvents = '';
+      input.focus();
+
+      // Update message indicator on toggle
+      const indicator = chatEl.querySelector('.chat-has-messages');
+      if (!indicator && history.length > 0) {
+        const toggleIcon = chatEl.querySelector('.chat-toggle-icon');
+        const dot = document.createElement('span');
+        dot.className = 'chat-has-messages';
+        toggleIcon?.parentElement?.appendChild(dot);
+      }
+    }
+  }
+
+  /**
+   * Append a message to the chat messages container.
+   */
+  private appendChatMsg(container: HTMLElement, role: 'user' | 'assistant' | 'system', content: string): void {
+    const div = document.createElement('div');
+    div.className = `chat-msg chat-msg-${role}`;
+    div.innerHTML = role === 'user' ? this.esc(content) : this.renderMath(content);
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
