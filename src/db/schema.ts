@@ -139,6 +139,7 @@ export interface Settings {
   vlmModel: string;            // vision модель для полного визуального анализа
   fallbackModels: string;      // запятые модели-заменители при 429/ошибках (для всех режимов)
   requestDelayMs: number;     // задержка между запросами (мс), для избежания rate-limit
+  relationsChunkSize: number; // сколько идей отправлять за один запрос при построении связей
   theme: 'light' | 'dark' | 'system';
   language: 'ru';
   extractionDetail: 'low' | 'medium' | 'high';

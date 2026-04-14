@@ -377,6 +377,7 @@ export class AnalysisPanel {
         vlmModel: settings.vlmModel,
         fallbackModels,
         requestDelayMs: settings.requestDelayMs,
+        relationsChunkSize: settings.relationsChunkSize ?? 40,
         detail,
         signal,
         onProgress: (msg, pct) => {

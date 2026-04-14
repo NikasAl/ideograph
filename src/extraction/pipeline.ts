@@ -37,6 +37,7 @@ export interface PipelineOptions {
   vlmModel?: string;           // vision model for full VLM analysis
   fallbackModels?: string[];   // fallback models on rate-limit / errors
   requestDelayMs?: number;     // delay (ms) between consecutive API requests
+  relationsChunkSize: number;  // how many ideas per LLM request for relation building
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
@@ -61,7 +62,7 @@ export interface PipelineResult {
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const {
     bookId, pageFrom, pageTo, mode, pdfData, format,
-    provider, model, detail, signal, onProgress, requestDelayMs,
+    provider, model, detail, signal, onProgress, requestDelayMs, relationsChunkSize,
   } = options;
   const ocrModel = options.ocrModel || model;
   const vlmModel = options.vlmModel || model;
@@ -99,16 +100,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   try {
     // === MODE: TEXT ===
     if (effectiveMode === 'text') {
-      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc });
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc });
     }
 
     // === MODE: OCR ===
     if (effectiveMode === 'ocr') {
-      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
+      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
     }
 
     // === MODE: VLM ===
-    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs });
+    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
   } catch (err) {
     // Log error analysis for debugging and resume support
     await logAnalysisError(bookId, pageFrom, pageTo, effectiveMode, provider, model, err);
@@ -150,9 +151,10 @@ async function runTextPipeline(opts: {
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
+  relationsChunkSize: number;
   toc: import('../db/schema.js').TOCEntry[];
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, toc } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
   const pagesText = format === 'djvu'
@@ -203,7 +205,7 @@ async function runTextPipeline(opts: {
     }
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
 }
 
 // ============================================================
@@ -218,8 +220,9 @@ async function runOcrPipeline(opts: {
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
+  relationsChunkSize: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
 
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
@@ -295,7 +298,7 @@ async function runOcrPipeline(opts: {
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
 }
 
 // ============================================================
@@ -310,8 +313,9 @@ async function runVlmPipeline(opts: {
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
   requestDelayMs?: number;
+  relationsChunkSize: number;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs } = opts;
+  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
@@ -354,7 +358,7 @@ async function runVlmPipeline(opts: {
     }
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport, fallbackModels });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model: vlmModel, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
 }
 
 // ============================================================
@@ -367,8 +371,10 @@ async function finalizeIdeas(opts: {
   onProgress?: (msg: string, pct: number) => void;
   qualityReport: { score: number; suggestedMode: ExtractionMode; reason: string };
   fallbackModels?: string[];
+  requestDelayMs?: number;
+  relationsChunkSize: number;
 }): Promise<PipelineResult> {
-  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels } = opts;
+  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
 
   onProgress?.('Дедупликация идей...', 85);
   const uniqueIdeas = deduplicateIdeas(allExtractedIdeas);
@@ -396,20 +402,63 @@ async function finalizeIdeas(opts: {
     relations: [] as import('../db/schema.js').Relation[],
   }));
 
-  // === Pass 2: Build relations between ideas ===
+  // === Pass 2: Build relations between ideas (chunked) ===
   let relations: PipelineResult['relations'] = [];
-  if (ideas.length >= 2) {
-    const ideasJson = JSON.stringify(ideas.map((i) => ({
-      id: i.id, title: i.title, summary: i.summary, type: i.type, pages: i.pages,
-    })));
+  if (ideas.length >= 2 && relationsChunkSize > 0) {
+    const chunkSize = relationsChunkSize;
+    const totalChunks = Math.ceil(ideas.length / chunkSize);
+    const allChunks: Array<{ start: number; end: number; ideas: typeof ideas }> = [];
 
-    const relMessages: ChatMessage[] = [
-      { role: 'system', content: BUILD_RELATIONS_SYSTEM },
-      { role: 'user', content: buildRelationsUser(ideasJson) },
-    ];
+    for (let i = 0; i < ideas.length; i += chunkSize) {
+      allChunks.push({ start: i, end: Math.min(i + chunkSize, ideas.length), ideas: ideas.slice(i, i + chunkSize) });
+    }
 
-    const relResponse = await provider.chat(relMessages, { model, fallbackModels, jsonMode: true });
-    relations = parseRelationsResponse(relResponse.content, ideas.map((i) => i.id), ideas.map((i) => ({ id: i.id, title: i.title })));
+    // Cross-chunk pairs: each chunk also includes the last idea from the previous chunk
+    // to detect relations spanning chunk boundaries
+    const relStartPct = 88;
+    const relEndPct = 94;
+    const relRange = relEndPct - relStartPct;
+
+    for (let ci = 0; ci < allChunks.length; ci++) {
+      const chunk = allChunks[ci];
+      const pct = relStartPct + Math.round((ci / totalChunks) * relRange);
+      onProgress?.(`Связи: чанк ${ci + 1}/${totalChunks}...`, pct);
+
+      // Rate-limit delay between relation requests
+      if (ci > 0 && requestDelayMs) await sleep(requestDelayMs);
+
+      // Build the list for this chunk: own ideas + tail from previous chunk for continuity
+      const contextIdeas: typeof ideas = [];
+      if (ci > 0) {
+        const prevChunk = allChunks[ci - 1];
+        // Add last few ideas from previous chunk for cross-boundary relations
+        const overlapCount = Math.min(5, prevChunk.ideas.length);
+        contextIdeas.push(...prevChunk.ideas.slice(-overlapCount));
+      }
+      contextIdeas.push(...chunk.ideas);
+
+      const ideasJson = JSON.stringify(contextIdeas.map((i) => ({
+        id: i.id, title: i.title, summary: i.summary, type: i.type, pages: i.pages,
+      })));
+
+      const relMessages: ChatMessage[] = [
+        { role: 'system', content: BUILD_RELATIONS_SYSTEM },
+        { role: 'user', content: buildRelationsUser(ideasJson) },
+      ];
+
+      try {
+        const relResponse = await provider.chat(relMessages, { model, fallbackModels, jsonMode: true });
+        const chunkRelations = parseRelationsResponse(
+          relResponse.content,
+          ideas.map((i) => i.id),
+          ideas.map((i) => ({ id: i.id, title: i.title })),
+        );
+        relations.push(...chunkRelations);
+      } catch (err) {
+        // If one chunk fails, log but continue with remaining chunks
+        console.warn(`[Pipeline] Relations chunk ${ci + 1}/${totalChunks} failed:`, err);
+      }
+    }
 
     for (const rel of relations) {
       const sourceIdea = ideas.find((i) => i.id === rel.source);

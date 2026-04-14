@@ -113,6 +113,17 @@ export class SettingsModal {
           </section>
 
           <section class="settings-section">
+            <h3>🔗 Построение связей</h3>
+            <div class="setting-group">
+              <label for="inp-rel-chunk">
+                Идей за запрос при построении связей:
+                <span class="setting-hint">Сколько идей отправлять в LLM за один запрос для выявления связей между ними. При большом количестве идей (>100) уменьшите значение (20–30), чтобы избежать ошибки 500 от API из-за слишком большого запроса. Значение по умолчанию: 40.</span>
+              </label>
+              <input type="number" id="inp-rel-chunk" class="setting-input" value="${s.relationsChunkSize ?? 40}" min="5" max="200" step="5" placeholder="40" />
+            </div>
+          </section>
+
+          <section class="settings-section">
             <h3>◑ Оформление</h3>
             <div class="setting-group">
               <label for="sel-theme">Тема:</label>
@@ -182,6 +193,7 @@ export class SettingsModal {
         vlmModel: el('#inp-vlm-model').value || current.vlmModel,
         fallbackModels: el('#inp-fallback').value || current.fallbackModels,
         requestDelayMs: parseInt(el('#inp-delay').value, 10) || 0,
+        relationsChunkSize: parseInt(el('#inp-rel-chunk').value, 10) || 40,
         theme: el('#sel-theme').value as Settings['theme'],
         extractionDetail: el('#sel-detail').value as Settings['extractionDetail'],
         zaiBaseUrl: el('#inp-zai-url').value || undefined,
