@@ -7,6 +7,7 @@ import type {
   AnalysisLog,
   FileHandleRecord,
   ModelRating,
+  IdeaChat,
 } from './schema.js';
 
 class IdeographDB extends Dexie {
@@ -17,6 +18,7 @@ class IdeographDB extends Dexie {
   analysisLog!: Table<AnalysisLog, number>;
   fileHandles!: Table<FileHandleRecord, number>;
   modelRatings!: Table<ModelRating, number>;
+  ideaChats!: Table<IdeaChat, number>;
 
   constructor() {
     super('IdeographDB');
@@ -37,6 +39,11 @@ class IdeographDB extends Dexie {
     // v3: add modelRatings table for model testing/benchmark
     this.version(3).stores({
       modelRatings: '++id, modelId, provider, testedAt, totalScore',
+    });
+
+    // v4: add ideaChats table for persistent LLM chat history per idea
+    this.version(4).stores({
+      ideaChats: '++id, ideaId, updatedAt',
     });
   }
 }
@@ -117,4 +124,20 @@ export async function getBestModels(limit: number = 20): Promise<ModelRating[]> 
 
 export async function clearModelRatings(): Promise<void> {
   return db.modelRatings.clear();
+}
+
+// ---- Idea chats persistence helpers ----
+
+export async function loadIdeaChat(ideaId: string): Promise<import('./schema.js').IdeaChatMessage[]> {
+  const record = await db.ideaChats.where('ideaId').equals(ideaId).first();
+  return record?.messages || [];
+}
+
+export async function saveIdeaChat(ideaId: string, messages: import('./schema.js').IdeaChatMessage[]): Promise<void> {
+  const existing = await db.ideaChats.where('ideaId').equals(ideaId).first();
+  if (existing) {
+    await db.ideaChats.update(existing.id!, { messages, updatedAt: Date.now() });
+  } else {
+    await db.ideaChats.add({ ideaId, messages, updatedAt: Date.now() });
+  }
 }

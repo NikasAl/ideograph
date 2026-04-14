@@ -220,3 +220,18 @@ export interface ModelRating {
   // New dynamic format
   testDetailsJson?: string; // JSON array of per-test details
 }
+
+// --- Idea chats ---
+
+export interface IdeaChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: number;
+}
+
+export interface IdeaChat {
+  id?: number;
+  ideaId: string;
+  messages: IdeaChatMessage[];
+  updatedAt: number;
+}

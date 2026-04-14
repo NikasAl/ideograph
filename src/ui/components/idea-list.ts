@@ -2,14 +2,15 @@
 // Idea List View — cards with extracted ideas and filters
 // ============================================================
 
-import { db, getSettings } from '../../db/index.js';
-import type { Idea, Familiarity, IdeaStatus, TOCEntry } from '../../db/schema.js';
+import { db, getSettings, loadIdeaChat, saveIdeaChat } from '../../db/index.js';
+import type { Idea, Familiarity, IdeaStatus, TOCEntry, IdeaChatMessage } from '../../db/schema.js';
 import type { ChatMessage } from '../../background/ai-client.js';
 import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
 import katex from 'katex';
+import { marked } from 'marked';
 import '../styles/components/idea-list.css';
 import 'katex/dist/katex.min.css';
 
@@ -34,8 +35,10 @@ export class IdeaListView {
   private filters = { familiarity: 'all' as Familiarity | 'all', status: 'all' as IdeaStatus | 'all', type: 'all' as Idea['type'] | 'all', chapter: 'all' as string };
   private tocEntries: TOCEntry[] = [];
   /** Per-idea chat history (user + assistant messages) */
-  private chatHistories = new Map<string, ChatMessage[]>();
-  /** System prompts built per idea (cached) */
+  private chatHistories = new Map<string, IdeaChatMessage[]>();
+  /** Track which ideas have chats loaded from DB */
+  private chatLoaded = new Set<string>();
+  /** System prompts built per idea (cached to avoid re-reading pageCache) */
   private chatSystemPrompts = new Map<string, string>();
 
   constructor(container: HTMLElement, bookId: string) {
@@ -115,7 +118,7 @@ export class IdeaListView {
 
   private card(i: Idea, tocPath: TOCEntry[] | null): string {
     const tocBreadcrumb = tocPath && tocPath.length > 0
-      ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.renderMath(e.title)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
+      ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.renderMarkdown(e.title, false)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
       : '';
     return `
       <div class="idea-card ${STAT_COLORS[i.status]}" data-idea-id="${i.id}">
@@ -127,9 +130,9 @@ export class IdeaListView {
           </span>
         </div>
         ${tocBreadcrumb}
-        <h3 class="idea-title">${this.renderMath(i.title)}</h3>
-        <p class="idea-summary">${this.renderMath(i.summary)}</p>
-        ${i.quote ? `<blockquote class="idea-quote">${this.renderMath(i.quote)}</blockquote>` : ''}
+        <h3 class="idea-title">${this.renderMarkdown(i.title, false)}</h3>
+        <p class="idea-summary">${this.renderMarkdown(i.summary, false)}</p>
+        ${i.quote ? `<blockquote class="idea-quote">${this.renderMarkdown(i.quote, false)}</blockquote>` : ''}
         <div class="idea-meta">
           <span>стр. ${i.pages.join(', ')}</span>
             ${i.relations.length ? `<span class="relations-badge">${i.relations.length} связей</span>` : ''}
@@ -385,7 +388,7 @@ export class IdeaListView {
             container.innerHTML = pageTexts.map(pt => `
               <details class="context-section" open>
                 <summary class="context-summary">Страница ${pt.page} <span class="context-source">(${pt.source})</span></summary>
-                <pre class="context-text">${this.renderMath(pt.text)}</pre>
+                <pre class="context-text">${this.renderMarkdown(pt.text, false)}</pre>
               </details>
             `).join('');
           }
@@ -525,17 +528,28 @@ export class IdeaListView {
 
   /**
    * Restore previously rendered chat messages when chat panel is opened.
+   * Loads from DB on first open, then uses in-memory cache.
    */
-  private restoreChatMessages(ideaId: string): void {
+  private async restoreChatMessages(ideaId: string): Promise<void> {
     const messagesEl = document.getElementById(`chat-messages-${ideaId}`);
     if (!messagesEl) return;
+
+    // Load from DB on first access
+    if (!this.chatLoaded.has(ideaId)) {
+      this.chatLoaded.add(ideaId);
+      const saved = await loadIdeaChat(ideaId);
+      if (saved.length > 0) {
+        this.chatHistories.set(ideaId, saved);
+      }
+    }
+
     const history = this.chatHistories.get(ideaId);
     if (!history || history.length === 0) {
       messagesEl.innerHTML = '<div class="chat-empty">Задайте вопрос об этой идее. Контекст идеи и страницы книги будет отправлен автоматически.</div>';
       return;
     }
     messagesEl.innerHTML = history.map(m =>
-      `<div class="chat-msg chat-msg-${m.role}">${m.role === 'user' ? this.esc(m.content) : this.renderMath(m.content)}</div>`
+      `<div class="chat-msg chat-msg-${m.role}">${m.role === 'user' ? this.renderMarkdown(m.content, true) : this.renderMarkdown(m.content, false)}</div>`
     ).join('');
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -624,7 +638,7 @@ export class IdeaListView {
     if (emptyEl) emptyEl.remove();
 
     // Show user message
-    history.push({ role: 'user', content: userText });
+    history.push({ role: 'user', content: userText, timestamp: Date.now() });
     this.appendChatMsg(messagesEl, 'user', userText);
     input.value = '';
     input.style.height = 'auto';
@@ -651,10 +665,10 @@ export class IdeaListView {
       const provider = createProvider(settings.activeProvider, apiKey, { zaiBaseUrl: settings.zaiBaseUrl });
       const fallbackModels = parseFallbackModels(settings.fallbackModels);
 
-      // Build messages array: system + history
+      // Build messages array: system + history (map to ChatMessage format for LLM)
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
-        ...history,
+        ...history.map(m => ({ role: m.role, content: m.content })),
       ];
 
       const response = await provider.chat(messages, {
@@ -664,8 +678,9 @@ export class IdeaListView {
       });
 
       // Store and render assistant response
-      history.push({ role: 'assistant', content: response.content });
-      // Will be rendered in finally after loading is removed
+      history.push({ role: 'assistant', content: response.content, timestamp: Date.now() });
+      // Persist to DB
+      await saveIdeaChat(ideaId, [...history]);
     } catch (err) {
       const errMsg = String(err);
       // Remove last user message from history on error so user can retry
@@ -700,46 +715,83 @@ export class IdeaListView {
   private appendChatMsg(container: HTMLElement, role: 'user' | 'assistant' | 'system', content: string): void {
     const div = document.createElement('div');
     div.className = `chat-msg chat-msg-${role}`;
-    div.innerHTML = role === 'user' ? this.esc(content) : this.renderMath(content);
+    div.innerHTML = role === 'user' ? this.renderMarkdown(content, true) : this.renderMarkdown(content, false);
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+  /** Unique token counter for protecting math from markdown parser */
+  private mathTokenCounter = 0;
+
   /**
-   * Render text with KaTeX math formulas.
-   * Supports: $$block$$, $inline$, and \(inline\) delimiters.
-   * Text is HTML-escaped first for security; only math delimiters are processed.
+   * Render text with Markdown + KaTeX math formulas.
+   * For user messages, plain text is escaped and light markdown applied.
+   * For assistant messages, full markdown rendering with math support.
+   *
+   * Supports: $$block$$, $inline$, \(inline\) math delimiters.
+   * Markdown: bold, italic, code, code blocks, lists, headings, links.
    */
-  private renderMath(text: string): string {
+  private renderMarkdown(text: string, plain: boolean): string {
     if (!text) return '';
-    // Step 1: escape HTML
-    const escaped = this.esc(text);
-    // Step 2: replace block math $$...$$ first (before inline to avoid conflicts)
-    let result = escaped.replace(/\$\$([\s\S]+?)\$\$/g, (_, latex) => {
+    const tokens = new Map<string, string>();
+    this.mathTokenCounter = 0;
+
+    // Step 1: extract and protect math formulas, replace with tokens
+    let result = text;
+
+    // Block math $$...$$
+    result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, latex) => {
+      const token = `%%MATH_BLOCK_${this.mathTokenCounter++}%%`;
       try {
-        return katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false });
+        tokens.set(token, katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false }));
       } catch {
-        return `$$${latex}$$`;
+        tokens.set(token, `<code>${this.esc(latex)}</code>`);
       }
+      return token;
     });
-    // Step 3: replace inline math $...$ (not preceded/followed by $)
+
+    // Inline math $...$ (not preceded/followed by $)
     result = result.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)/g, (_, latex) => {
+      const token = `%%MATH_INLINE_${this.mathTokenCounter++}%%`;
       try {
-        return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+        tokens.set(token, katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false }));
       } catch {
-        return `$${latex}$`;
+        tokens.set(token, `<code>${this.esc(latex)}</code>`);
       }
+      return token;
     });
-    // Step 4: replace \(...\) LaTeX-style inline
+
+    // \(...\) LaTeX-style inline
     result = result.replace(/\\\((.+?)\\\)/g, (_, latex) => {
+      const token = `%%MATH_INLINE_${this.mathTokenCounter++}%%`;
       try {
-        return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+        tokens.set(token, katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false }));
       } catch {
-        return `\\(${latex}\\)`;
+        tokens.set(token, `<code>${this.esc(latex)}</code>`);
       }
+      return token;
     });
+
+    // Step 2: apply markdown
+    if (plain) {
+      // User messages: light formatting only (newlines → <br>, **bold**, *italic*, `code`)
+      result = this.esc(result);
+      result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      result = result.replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, '<em>$1</em>');
+      result = result.replace(/`([^`]+?)`/g, '<code>$1</code>');
+      result = result.replace(/\n/g, '<br>');
+    } else {
+      // Assistant messages: full marked rendering
+      result = marked.parse(result, { async: false, breaks: true }) as string;
+    }
+
+    // Step 3: restore math tokens
+    for (const [token, html] of tokens) {
+      result = result.replace(token, html);
+    }
+
     return result;
   }
 
