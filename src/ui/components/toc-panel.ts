@@ -3,7 +3,8 @@
 // ============================================================
 
 import { db } from '../../db/index.js';
-import type { TOCEntry, Book } from '../../db/schema.js';
+import type { TOCEntry, Book, ExtractionMode } from '../../db/schema.js';
+import { EXTRACTION_MODES } from '../../db/schema.js';
 import { getSettings } from '../../db/index.js';
 import { createProvider } from '../../background/ai-client.js';
 import { extractTOC, extractTOCFromOutline, summarizeTOCChapters, computePageRanges } from '../../extraction/toc-extractor.js';
@@ -93,6 +94,9 @@ export class TOCPanel {
     const book = this.book!;
     const hasTOC = this.toc.length > 0;
     const offset = book.pageOffset || 0;
+    const modeOptions = EXTRACTION_MODES.map(m =>
+      `<option value="${m.mode}" ${m.mode === book.extractionMode ? 'selected' : ''}>${m.label}</option>`
+    ).join('');
     return `
       <div class="toc-input-section" id="toc-input-section">
         ${!hasTOC ? '<p style="margin:0 0 12px;color:var(--text-secondary);font-size:0.9rem;">Укажите страницы, где напечатано оглавление книги:</p>' : ''}
@@ -101,6 +105,9 @@ export class TOCPanel {
           <input type="number" class="toc-page-input" id="toc-from" value="${!hasTOC ? 1 : ''}" min="1" max="${book.totalPages}" placeholder="от">
           <span class="toc-page-separator">—</span>
           <input type="number" class="toc-page-input" id="toc-to" value="${!hasTOC ? 5 : ''}" min="1" max="${book.totalPages}" placeholder="до">
+          <select class="toc-mode-select" id="toc-mode-select" title="Режим распознавания">
+            ${modeOptions}
+          </select>
           <button class="secondary-btn" id="toc-outline-btn" ${this.isExtractingOutline ? 'disabled' : ''} title="Извлечь из встроенных bookmarks PDF (без LLM)">
             ${this.isExtractingOutline ? '... Читаем...' : 'Из bookmarks'}
           </button>
@@ -501,7 +508,7 @@ export class TOCPanel {
       const entries = await extractTOC({
         bookId: this.bookId,
         tocPages: [from, to],
-        mode: book.extractionMode,
+        mode: (document.querySelector('#toc-mode-select') as HTMLSelectElement)?.value as ExtractionMode || book.extractionMode,
         format: book.format,
         pdfData,
         provider,
@@ -755,9 +762,16 @@ export class TOCPanel {
 
     if (progress && fill && text) {
       progress.style.display = 'block';
+      // Force reflow to ensure transition triggers when going from hidden
+      void fill.offsetWidth;
       fill.style.width = `${pct}%`;
       text.textContent = msg;
     }
+  }
+
+  private hideProgress(): void {
+    const progress = this.container.querySelector('#toc-progress') as HTMLElement;
+    if (progress) progress.style.display = 'none';
   }
 
   private showError(msg: string): void {
@@ -771,9 +785,7 @@ export class TOCPanel {
   private hideError(): void {
     const errEl = this.container.querySelector('#toc-error') as HTMLElement;
     if (errEl) errEl.style.display = 'none';
-
-    const progress = this.container.querySelector('#toc-progress') as HTMLElement;
-    if (progress) progress.style.display = 'none';
+    this.hideProgress();
   }
 
   private escapeHtml(str: string): string {

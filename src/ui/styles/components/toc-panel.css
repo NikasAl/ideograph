@@ -86,8 +86,26 @@
   font-size: 1rem;
 }
 
+.toc-mode-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  max-width: 180px;
+}
+
+.toc-mode-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px var(--accent-color-alpha);
+}
+
 .toc-progress {
   margin-top: 12px;
+  display: none;
 }
 
 .toc-progress-bar {
