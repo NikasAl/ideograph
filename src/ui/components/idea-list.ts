@@ -7,7 +7,9 @@ import type { Idea, Familiarity, IdeaStatus, TOCEntry } from '../../db/schema.js
 import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
+import katex from 'katex';
 import '../styles/components/idea-list.css';
+import 'katex/dist/katex.min.css';
 
 const TYPE_ICONS: Record<string, string> = {
   definition: '', method: '\\', theorem: '/',
@@ -107,7 +109,7 @@ export class IdeaListView {
 
   private card(i: Idea, tocPath: TOCEntry[] | null): string {
     const tocBreadcrumb = tocPath && tocPath.length > 0
-      ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.esc(e.title)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
+      ? `<div class="idea-toc-path">${tocPath.map(e => `<span class="toc-path-segment toc-path-level-${e.level}">${this.renderMath(e.title)}</span>`).join(' <span class="toc-path-sep">/</span> ')}</div>`
       : '';
     return `
       <div class="idea-card ${STAT_COLORS[i.status]}" data-idea-id="${i.id}">
@@ -119,9 +121,9 @@ export class IdeaListView {
           </span>
         </div>
         ${tocBreadcrumb}
-        <h3 class="idea-title">${this.esc(i.title)}</h3>
-        <p class="idea-summary">${this.esc(i.summary)}</p>
-        ${i.quote ? `<blockquote class="idea-quote">${this.esc(i.quote)}</blockquote>` : ''}
+        <h3 class="idea-title">${this.renderMath(i.title)}</h3>
+        <p class="idea-summary">${this.renderMath(i.summary)}</p>
+        ${i.quote ? `<blockquote class="idea-quote">${this.renderMath(i.quote)}</blockquote>` : ''}
         <div class="idea-meta">
           <span>стр. ${i.pages.join(', ')}</span>
             ${i.relations.length ? `<span class="relations-badge">${i.relations.length} связей</span>` : ''}
@@ -320,7 +322,7 @@ export class IdeaListView {
             container.innerHTML = pageTexts.map(pt => `
               <details class="context-section" open>
                 <summary class="context-summary">Страница ${pt.page} <span class="context-source">(${pt.source})</span></summary>
-                <pre class="context-text">${this.esc(pt.text)}</pre>
+                <pre class="context-text">${this.renderMath(pt.text)}</pre>
               </details>
             `).join('');
           }
@@ -459,6 +461,42 @@ export class IdeaListView {
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  /**
+   * Render text with KaTeX math formulas.
+   * Supports: $$block$$, $inline$, and \(inline\) delimiters.
+   * Text is HTML-escaped first for security; only math delimiters are processed.
+   */
+  private renderMath(text: string): string {
+    if (!text) return '';
+    // Step 1: escape HTML
+    const escaped = this.esc(text);
+    // Step 2: replace block math $$...$$ first (before inline to avoid conflicts)
+    let result = escaped.replace(/\$\$([\s\S]+?)\$\$/g, (_, latex) => {
+      try {
+        return katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false });
+      } catch {
+        return `$$${latex}$$`;
+      }
+    });
+    // Step 3: replace inline math $...$ (not preceded/followed by $)
+    result = result.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)/g, (_, latex) => {
+      try {
+        return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+      } catch {
+        return `$${latex}$`;
+      }
+    });
+    // Step 4: replace \(...\) LaTeX-style inline
+    result = result.replace(/\\\((.+?)\\\)/g, (_, latex) => {
+      try {
+        return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+      } catch {
+        return `\\(${latex}\\)`;
+      }
+    });
+    return result;
+  }
 
   /** Escape for HTML attribute values (single-quote safe) */
   private escAttr(s: string): string {
