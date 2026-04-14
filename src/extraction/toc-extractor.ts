@@ -628,8 +628,16 @@ function parseRawTOCResponse(content: string): RawTOCItem[] {
 // ============================================================
 
 function buildTOCEntries(rawItems: RawTOCItem[], bookId: string, totalPages: number): TOCEntry[] {
+  // Step 0: If all items are level 1 (flat), try to infer hierarchy from § numbers
+  // and chapter markers (ГЛАВА, ЧАСТЬ, etc.)
+  const allLevel1 = rawItems.length > 0 && rawItems.every(item => (item.level ?? 1) <= 1);
+  let items = rawItems;
+  if (allLevel1 && rawItems.length > 5) {
+    items = inferHierarchyFromFlat(rawItems);
+  }
+
   // Step 1: Create entries with IDs
-  const entries: TOCEntry[] = rawItems.map((item, idx) => ({
+  const entries: TOCEntry[] = items.map((item, idx) => ({
     id: `${bookId}_toc_${idx}`,
     title: (item.title || '').trim(),
     page: Math.max(1, Math.min(item.page ?? 1, totalPages)),
@@ -643,8 +651,8 @@ function buildTOCEntries(rawItems: RawTOCItem[], bookId: string, totalPages: num
     titleToId.set(entry.title.toLowerCase().trim(), entry.id);
   }
 
-  for (let i = 0; i < rawItems.length; i++) {
-    const item = rawItems[i];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     if (item?.parentTitle && item.level && item.level > 1) {
       const parentId = titleToId.get(item.parentTitle.toLowerCase().trim());
       if (parentId && parentId !== entries[i].id) {
@@ -674,6 +682,152 @@ function buildTOCEntries(rawItems: RawTOCItem[], bookId: string, totalPages: num
   }
 
   return entries;
+}
+
+/**
+ * Infer hierarchy from a flat list of TOC items.
+ * Detects chapters by:
+ * 1. § numbered items → always level 2
+ * 2. Items that look like chapter titles (short, no §, not preceded by §) → level 1
+ *
+ * Strategy:
+ * - Group consecutive § items under a preceding non-§ item (chapter)
+ * - If there's a non-§ item that looks like a chapter header (ГЛАВА, ЧАСТЬ, etc.) → level 1
+ * - Otherwise, group § items into chapters by detecting gaps in § numbering
+ */
+function inferHierarchyFromFlat(items: RawTOCItem[]): RawTOCItem[] {
+  const result: RawTOCItem[] = [...items];
+
+  // Pattern: detect chapter markers in titles
+  const chapterPattern = /^(глава|часть|раздел|chapter|part)\s/i;
+  // Pattern: detect § markers
+  const sectionPattern = /^§\s*\d+/i;
+
+  // First pass: mark items with their detected type
+  const types: Array<'chapter' | 'section' | 'unknown'> = result.map(item => {
+    const title = (item.title || '').trim();
+    if (chapterPattern.test(title)) return 'chapter';
+    if (sectionPattern.test(title)) return 'section';
+    return 'unknown';
+  });
+
+  // Count detected chapters
+  const chapterCount = types.filter(t => t === 'chapter').length;
+
+  if (chapterCount >= 2) {
+    // We found chapter markers — use them as level 1
+    // Everything between two chapters that has § → level 2, non-§ → level 2 too
+    for (let i = 0; i < result.length; i++) {
+      if (types[i] === 'chapter') {
+        result[i].level = 1;
+        result[i].parentTitle = undefined;
+      } else {
+        result[i].level = 2;
+        // Find the preceding chapter as parent
+        for (let j = i - 1; j >= 0; j--) {
+          if (types[j] === 'chapter') {
+            result[i].parentTitle = result[j].title;
+            break;
+          }
+        }
+      }
+    }
+  } else {
+    // No explicit chapter markers — detect chapters by § number gaps
+    // § numbering often restarts at each chapter (e.g., §1-8, then §9-17, etc.)
+    // Group items where § numbers are consecutive into chapters
+
+    // Find all § items and extract their numbers
+    const sectionIndices: number[] = [];
+    const sectionNumbers: number[] = [];
+
+    for (let i = 0; i < result.length; i++) {
+      const match = (result[i].title || '').match(/^§\s*(\d+)/i);
+      if (match) {
+        sectionIndices.push(i);
+        sectionNumbers.push(parseInt(match[1]));
+      }
+    }
+
+    // Detect chapter boundaries: gaps in § numbering > 1
+    const chapterStarts = new Set<number>();
+    chapterStarts.add(0); // First item starts a chapter
+    for (let i = 1; i < sectionNumbers.length; i++) {
+      // If § number doesn't follow previous (gap > 1), new chapter starts
+      if (sectionNumbers[i] !== sectionNumbers[i - 1] + 1) {
+        chapterStarts.add(sectionIndices[i]);
+      }
+    }
+
+    // Create synthetic chapter entries from the items at chapter boundaries
+    // (non-§ items before the first § in each group become chapters)
+    const syntheticChapters: RawTOCItem[] = [];
+    const chapterRanges: Array<{ start: number; end: number; chapterIdx: number }> = [];
+
+    let currentChapterStart = 0;
+    for (const start of chapterStarts) {
+      if (start === currentChapterStart) continue;
+      chapterRanges.push({ start: currentChapterStart, end: start - 1, chapterIdx: syntheticChapters.length });
+      currentChapterStart = start;
+    }
+    chapterRanges.push({ start: currentChapterStart, end: result.length - 1, chapterIdx: syntheticChapters.length });
+
+    // For each chapter range, find the first non-§ item as chapter title,
+    // or use the first § item's general topic
+    for (const range of chapterRanges) {
+      let chapterTitle: string | undefined;
+
+      // Look for a non-§ item at the start of this range (potential chapter title)
+      for (let i = range.start; i <= Math.min(range.end, range.start + 2); i++) {
+        if (!sectionPattern.test(result[i].title || '')) {
+          chapterTitle = result[i].title;
+          break;
+        }
+      }
+
+      if (chapterTitle) {
+        syntheticChapters.push({
+          title: chapterTitle,
+          page: result[range.start].page,
+          level: 1,
+        });
+      } else {
+        // No clear chapter title — create one from the first §
+        const firstSection = result[range.start];
+        const title = (firstSection.title || '').replace(/^§\s*\d+\.?\s*/i, '').split('.')[0].trim();
+        syntheticChapters.push({
+          title: title || `Глава ${range.chapterIdx + 1}`,
+          page: firstSection.page,
+          level: 1,
+        });
+      }
+    }
+
+    // Build final result: chapters + sections with parentTitle
+    const finalResult: RawTOCItem[] = [];
+
+    for (let c = 0; c < chapterRanges.length; c++) {
+      const chapter = syntheticChapters[c];
+      finalResult.push(chapter);
+
+      const range = chapterRanges[c];
+      for (let i = range.start; i <= range.end; i++) {
+        const item = result[i];
+        // Skip if this item was used as the chapter title
+        if (item.title === chapter.title && item.page === chapter.page) continue;
+
+        finalResult.push({
+          ...item,
+          level: 2,
+          parentTitle: chapter.title,
+        });
+      }
+    }
+
+    return finalResult;
+  }
+
+  return result;
 }
 
 function clampLevel(level: number): number {
