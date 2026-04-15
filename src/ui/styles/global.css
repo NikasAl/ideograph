@@ -425,6 +425,153 @@ body {
   color: var(--text-secondary);
 }
 
+/* ============================================================
+   Analysis Log — LLM interaction log
+   ============================================================ */
+
+.analysis-log-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 12px;
+}
+
+.log-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.log-toggle:hover { opacity: 0.85; }
+
+.log-toggle-icon {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.log-toggle label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.log-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.log-body {
+  margin-top: 8px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.log-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-entry {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.log-entry-ok { border-left: 3px solid #059669; }
+.log-entry-error { border-left: 3px solid #dc2626; }
+
+.log-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  list-style: none;
+}
+
+.log-details > summary::-webkit-details-marker { display: none; }
+.log-details > summary::before { content: '\25B8'; font-size: 10px; color: var(--text-muted); }
+.log-details[open] > summary::before { content: '\25BE'; }
+.log-details > summary:hover { background: var(--bg-hover); }
+
+.log-phase-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.log-phase-extraction { background: #dbeafe; color: #1d4ed8; }
+.log-phase-ocr { background: #fef3c7; color: #92400e; }
+.log-phase-relations { background: #f3e8ff; color: #7c3aed; }
+
+[data-theme="dark"] .log-phase-extraction { background: #1e3a5f; color: #93c5fd; }
+[data-theme="dark"] .log-phase-ocr { background: #451a03; color: #fcd34d; }
+[data-theme="dark"] .log-phase-relations { background: #3b0764; color: #c4b5fd; }
+
+.log-label { font-weight: 500; color: var(--text-primary); }
+.log-model { color: var(--text-muted); font-size: 11px; font-family: 'DejaVu Sans Mono', monospace; }
+.log-duration { color: var(--text-secondary); font-size: 11px; margin-left: auto; font-family: 'DejaVu Sans Mono', monospace; }
+.log-tokens { color: var(--text-muted); font-size: 10px; font-family: 'DejaVu Sans Mono', monospace; }
+
+.log-status { font-weight: 700; font-size: 13px; }
+.log-entry-ok.log-status { color: #059669; }
+.log-entry-error.log-status { color: #dc2626; }
+
+.log-section { border-top: 1px solid var(--border-light); }
+
+.log-section-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-card);
+}
+
+.log-section-header:hover { background: var(--bg-hover); }
+
+.log-pre {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'DejaVu Sans Mono', 'Consolas', monospace;
+  border-top: 1px solid var(--border-light);
+}
+
+.log-system { color: var(--text-muted); font-style: italic; background: var(--bg-secondary); }
+.log-user { color: var(--text-primary); }
+.log-response { color: var(--text-primary); background: var(--bg-secondary); }
+.log-error-content { color: #dc2626; background: rgba(220, 38, 38, 0.04); }
+
 /* Modal */
 .modal-overlay {
   position: fixed;

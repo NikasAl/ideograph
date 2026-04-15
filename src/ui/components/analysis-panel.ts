@@ -12,6 +12,7 @@ import { evaluateTextLayer, evaluateTextLayerMultiple, getTextPreview } from '..
 import { extractTextFromPDFPage, renderPDFPageToImage } from '../../extraction/text-extractor.js';
 import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { runPipeline } from '../../extraction/pipeline.js';
+import type { LLMLogEntry } from '../../extraction/pipeline.js';
 import { getFileHandle, verifyFileHandle, ensureFileAccess, reconnectFileHandleWithCheck, readFileAsArrayBuffer } from '../utils/file-store.js';
 
 export interface AnalysisPanelOptions {
@@ -168,6 +169,16 @@ export class AnalysisPanel {
           <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
           <p class="progress-text" id="progress-text">Подготовка...</p>
         </div>
+        <div class="analysis-log-section">
+          <div class="log-toggle" id="log-toggle">
+            <span class="log-toggle-icon">▶</span>
+            <label>Лог взаимодействия с LLM</label>
+            <span class="log-counter" id="log-counter" style="display:none">0</span>
+          </div>
+          <div class="log-body" id="log-body" style="display:none">
+            <div class="log-entries" id="log-entries"></div>
+          </div>
+        </div>
       </div>
     `;
 
@@ -222,6 +233,16 @@ export class AnalysisPanel {
       this.abortController?.abort();
       (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'none';
       (panel.querySelector('#btn-start') as HTMLElement).style.display = 'inline-block';
+    });
+
+    // Log toggle
+    panel.querySelector('#log-toggle')?.addEventListener('click', () => {
+      const body = panel.querySelector('#log-body') as HTMLElement | null;
+      const icon = panel.querySelector('.log-toggle-icon');
+      if (!body) return;
+      const isVisible = body.style.display !== 'none';
+      body.style.display = isVisible ? 'none' : 'block';
+      if (icon) icon.textContent = isVisible ? '▶' : '▼';
     });
 
     panel.querySelector('#btn-start')?.addEventListener('click', () => this.startAnalysis(panel));
@@ -384,6 +405,9 @@ export class AnalysisPanel {
           progressFill.style.width = `${pct}%`;
           progressText.textContent = msg;
         },
+        onLogEntry: (entry) => {
+          this.addLogEntry(panel, entry);
+        },
       });
 
       progressFill.style.width = '100%';
@@ -419,6 +443,94 @@ export class AnalysisPanel {
     if (score >= 0.7) return 'quality-good';
     if (score >= 0.4) return 'quality-medium';
     return 'quality-bad';
+  }
+
+  /** Add a log entry to the analysis log panel */
+  private addLogEntry(panel: HTMLElement, entry: LLMLogEntry): void {
+    const counter = panel.querySelector('#log-counter') as HTMLElement | null;
+    const entries = panel.querySelector('#log-entries') as HTMLElement | null;
+    if (!entries) return;
+
+    // Update counter
+    if (counter) {
+      const count = parseInt(counter.textContent || '0', 10) + 1;
+      counter.textContent = String(count);
+      counter.style.display = 'inline';
+    }
+
+    const phaseIcon = entry.phase === 'ocr' ? '📷' : entry.phase === 'relations' ? '🔗' : '💡';
+    const phaseLabel = entry.phase === 'ocr' ? 'OCR' : entry.phase === 'relations' ? 'Связи' : 'Извлечение';
+    const isError = !!entry.error;
+    const statusClass = isError ? 'log-entry-error' : 'log-entry-ok';
+    const statusIcon = isError ? '✗' : '✓';
+
+    const tokenInfo = entry.tokens
+      ? `<span class="log-tokens">⬡ ${entry.tokens.prompt.toLocaleString()} / ${entry.tokens.completion.toLocaleString()} / ${entry.tokens.total.toLocaleString()}</span>`
+      : '';
+
+    const div = document.createElement('div');
+    div.className = `log-entry ${statusClass}`;
+    div.dataset.phase = entry.phase;
+    div.innerHTML = `
+      <details class="log-details">
+        <summary class="log-summary">
+          <span class="log-phase-badge log-phase-${entry.phase}">${phaseIcon} ${phaseLabel}</span>
+          <span class="log-label">${this.esc(entry.label)}</span>
+          <span class="log-model">${this.esc(entry.model)}</span>
+          <span class="log-duration">${entry.durationMs >= 1000 ? (entry.durationMs / 1000).toFixed(1) + 's' : entry.durationMs + 'ms'}</span>
+          ${tokenInfo}
+          <span class="log-status ${statusClass}">${statusIcon}</span>
+        </summary>
+        <div class="log-detail-body">
+          <div class="log-section">
+            <div class="log-section-header" data-target="log-system-${entry.id}">System prompt ▾</div>
+            <pre class="log-pre log-system" id="log-system-${entry.id}">${this.esc(entry.requestSystem)}</pre>
+          </div>
+          <div class="log-section">
+            <div class="log-section-header" data-target="log-user-${entry.id}">User prompt ▾</div>
+            <pre class="log-pre log-user" id="log-user-${entry.id}">${this.esc(entry.requestUser)}</pre>
+          </div>
+          ${isError ? `
+            <div class="log-section">
+              <div class="log-section-header" data-target="log-error-${entry.id}">Ошибка ▾</div>
+              <pre class="log-pre log-error-content" id="log-error-${entry.id}">${this.esc(entry.error!)}</pre>
+            </div>
+          ` : `
+            <div class="log-section">
+              <div class="log-section-header" data-target="log-response-${entry.id}">Response ▾</div>
+              <pre class="log-pre log-response" id="log-response-${entry.id}">${this.formatResponse(entry.responseContent)}</pre>
+            </div>
+          `}
+        </div>
+      </details>
+    `;
+
+    entries.appendChild(div);
+    entries.scrollTop = entries.scrollHeight;
+
+    // Bind section toggles
+    div.querySelectorAll('.log-section-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const targetId = (header as HTMLElement).dataset.target;
+        const target = targetId ? document.getElementById(targetId) : null;
+        if (target) {
+          const isHidden = target.style.display === 'none';
+          target.style.display = isHidden ? 'block' : 'none';
+          header.textContent = header.textContent?.replace('▾', '▸').replace('▸', '▾') || '';
+        }
+      });
+    });
+  }
+
+  /** Format response content — try to pretty-print JSON */
+  private formatResponse(content: string): string {
+    if (!content) return '';
+    try {
+      const json = JSON.parse(content);
+      return this.esc(JSON.stringify(json, null, 2));
+    } catch {
+      return this.esc(content);
+    }
   }
 
   private esc(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

@@ -9,7 +9,7 @@
 
 import { db } from '../db/index.js';
 import type { Idea, LLMExtractedIdea, ExtractionMode } from '../db/schema.js';
-import type { AIProvider, ChatMessage } from '../background/ai-client.js';
+import type { AIProvider, ChatMessage, VisionMessage } from '../background/ai-client.js';
 import { evaluateTextLayer } from './mode-detector.js';
 import { extractTextFromPDFRange, renderPDFPageToImage, extractTextFromPDFPage } from './text-extractor.js';
 import { extractTextFromDJVURange, renderDJVUPageToImage, extractTextFromDJVUPage } from './djvu-extractor.js';
@@ -22,6 +22,22 @@ import { chapterContextBlock } from './prompts/toc-prompts.js';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface LLMLogEntry {
+  id: number;
+  timestamp: number;
+  phase: 'extraction' | 'ocr' | 'relations';
+  label: string;
+  model: string;
+  requestSystem: string;
+  requestUser: string;
+  responseContent: string;
+  durationMs: number;
+ tokens?: { prompt: number; completion: number; total: number };
+  error?: string;
+  ideasFound?: number;
+  relationsFound?: number;
 }
 
 export interface PipelineOptions {
@@ -41,6 +57,8 @@ export interface PipelineOptions {
   detail: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
   onProgress?: (message: string, percent: number) => void;
+  /** Called for each LLM request/response during analysis */
+  onLogEntry?: (entry: LLMLogEntry) => void;
   /** Last successfully completed page (for resume support) */
   resumeFromPage?: number;
 }
@@ -62,11 +80,71 @@ export interface PipelineResult {
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const {
     bookId, pageFrom, pageTo, mode, pdfData, format,
-    provider, model, detail, signal, onProgress, requestDelayMs, relationsChunkSize,
+    provider, model, detail, signal, onProgress, onLogEntry, requestDelayMs, relationsChunkSize,
   } = options;
   const ocrModel = options.ocrModel || model;
   const vlmModel = options.vlmModel || model;
   const fallbackModels = options.fallbackModels;
+
+  let logIdCounter = 0;
+
+  /** Helper to wrap a provider.chat() call with logging */
+  const loggedChat = async (
+    messages: ChatMessage[],
+    opts: Parameters<AIProvider['chat']>[1],
+    phase: LLMLogEntry['phase'],
+    label: string,
+  ) => {
+    const id = ++logIdCounter;
+    const t0 = Date.now();
+    const sysMsg = messages.find(m => m.role === 'system')?.content || '';
+    const usrMsg = messages.filter(m => m.role !== 'system').map(m => m.content).join('\n---\n');
+    try {
+      const resp = await provider.chat(messages, opts);
+      const dur = Date.now() - t0;
+      onLogEntry?.({ id, timestamp: t0, phase, label, model: resp.model, requestSystem: sysMsg, requestUser: usrMsg, responseContent: resp.content, durationMs: dur, tokens: resp.usage ? { prompt: resp.usage.promptTokens, completion: resp.usage.completionTokens, total: resp.usage.totalTokens } : undefined });
+      return resp;
+    } catch (err) {
+      const dur = Date.now() - t0;
+      const errMsg = String(err);
+      onLogEntry?.({ id, timestamp: t0, phase, label, model: opts?.model || model, requestSystem: sysMsg, requestUser: usrMsg, responseContent: '', durationMs: dur, error: errMsg.length > 500 ? errMsg.slice(0, 500) : errMsg });
+      throw err;
+    }
+  };
+
+  /** Helper to wrap a provider.chatVision() call with logging */
+  const loggedChatVision = async (
+    messages: VisionMessage[],
+    opts: Parameters<AIProvider['chatVision']>[1],
+    phase: LLMLogEntry['phase'],
+    label: string,
+  ) => {
+    const id = ++logIdCounter;
+    const t0 = Date.now();
+    const sysContent = messages.find(m => m.role === 'system')?.content;
+    const sysMsg = typeof sysContent === 'string' ? sysContent : '';
+    const userParts: string[] = [];
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      if (typeof m.content === 'string') { userParts.push(m.content); continue; }
+      for (const part of m.content) {
+        if (part.type === 'text') userParts.push(part.text || '');
+        else if (part.type === 'image_url') userParts.push('[IMAGE base64 ...]');
+      }
+    }
+    const usrMsg = userParts.join('\n');
+    try {
+      const resp = await provider.chatVision(messages, opts);
+      const dur = Date.now() - t0;
+      onLogEntry?.({ id, timestamp: t0, phase, label, model: resp.model, requestSystem: sysMsg, requestUser: usrMsg, responseContent: resp.content, durationMs: dur, tokens: resp.usage ? { prompt: resp.usage.promptTokens, completion: resp.usage.completionTokens, total: resp.usage.totalTokens } : undefined });
+      return resp;
+    } catch (err) {
+      const dur = Date.now() - t0;
+      const errMsg = String(err);
+      onLogEntry?.({ id, timestamp: t0, phase, label, model: opts?.model || model, requestSystem: sysMsg, requestUser: usrMsg, responseContent: '', durationMs: dur, error: errMsg.length > 500 ? errMsg.slice(0, 500) : errMsg });
+      throw err;
+    }
+  };
 
   const book = await db.books.get(bookId);
   if (!book) throw new Error(`Книга ${bookId} не найдена`);
@@ -100,16 +178,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   try {
     // === MODE: TEXT ===
     if (effectiveMode === 'text') {
-      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc });
+      return await runTextPipeline({ bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc, log: loggedChat, logVision: loggedChatVision });
     }
 
     // === MODE: OCR ===
     if (effectiveMode === 'ocr') {
-      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
+      return await runOcrPipeline({ bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log: loggedChat, logVision: loggedChatVision });
     }
 
     // === MODE: VLM ===
-    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
+    return await runVlmPipeline({ bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log: loggedChat, logVision: loggedChatVision });
   } catch (err) {
     // Log error analysis for debugging and resume support
     await logAnalysisError(bookId, pageFrom, pageTo, effectiveMode, provider, model, err);
@@ -153,8 +231,10 @@ async function runTextPipeline(opts: {
   requestDelayMs?: number;
   relationsChunkSize: number;
   toc: import('../db/schema.js').TOCEntry[];
+  log: (messages: ChatMessage[], opts: Parameters<AIProvider['chat']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
+  logVision: (messages: VisionMessage[], opts: Parameters<AIProvider['chatVision']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, toc, log } = opts;
 
   onProgress?.('Извлечение текста из страниц...', 10);
   const pagesText = format === 'djvu'
@@ -186,12 +266,14 @@ async function runTextPipeline(opts: {
         ? chapterContextBlock(chapter.title, chapter.page, chapter.pageEnd ?? chapter.page, chapter.summary)
         : null;
 
+      const label = `Чанк ${i + 1}/${chunks.length} (стр. ${chunks[i].pageRange[0]}-${chunks[i].pageRange[1]})`;
+
       const messages: ChatMessage[] = [
         { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction + (chapterContext || '') },
         { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
       ];
 
-      const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
+      const response = await log(messages, { model, fallbackModels, jsonMode: true }, 'extraction', label);
       const parsed = parseIdeasResponse(response.content, chunks[i].pageRange);
       allExtractedIdeas.push(...parsed);
       lastCompletedChunkPage = chunks[i].pageRange[1];
@@ -205,7 +287,7 @@ async function runTextPipeline(opts: {
     }
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log });
 }
 
 // ============================================================
@@ -221,8 +303,10 @@ async function runOcrPipeline(opts: {
   fallbackModels?: string[];
   requestDelayMs?: number;
   relationsChunkSize: number;
+  log: (messages: ChatMessage[], opts: Parameters<AIProvider['chat']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
+  logVision: (messages: VisionMessage[], opts: Parameters<AIProvider['chatVision']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
+  const { bookId, pageFrom, pageTo, provider, model, ocrModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log, logVision } = opts;
 
   // Phase 1: OCR — convert each page image to Markdown with LaTeX formulas
   onProgress?.('Рендеринг страниц и OCR-конвертация...', 10);
@@ -247,9 +331,11 @@ async function runOcrPipeline(opts: {
         ocrPageUserPrompt(p),
       );
 
-      const ocrResponse = await provider.chatVision(
+      const ocrResponse = await logVision(
         [{ role: 'system', content: OCR_TO_MARKDOWN_SYSTEM }, visionMsg],
         { model: ocrModel, fallbackModels },
+        'ocr',
+        `OCR стр. ${p}`,
       );
 
       const markdown = ocrResponse.content.trim();
@@ -288,17 +374,19 @@ async function runOcrPipeline(opts: {
     // Rate-limit delay between requests
     if (i > 0 && requestDelayMs) await sleep(requestDelayMs);
 
+    const ocrLabel = `Чанк ${i + 1}/${chunks.length} (стр. ${chunks[i].pageRange[0]}-${chunks[i].pageRange[1]})`;
+
     const messages: ChatMessage[] = [
       { role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction },
       { role: 'user', content: extractIdeasUserText(chunks[i].text, chunks[i].pageRange) },
     ];
 
-    const response = await provider.chat(messages, { model, fallbackModels, jsonMode: true });
+    const response = await log(messages, { model, fallbackModels, jsonMode: true }, 'extraction', ocrLabel);
     const parsed = parseIdeasResponse(response.content, chunks[i].pageRange);
     allExtractedIdeas.push(...parsed);
   }
 
-  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize });
+  return finalizeIdeas({ bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log });
 }
 
 // ============================================================
@@ -314,8 +402,10 @@ async function runVlmPipeline(opts: {
   fallbackModels?: string[];
   requestDelayMs?: number;
   relationsChunkSize: number;
+  log: (messages: ChatMessage[], opts: Parameters<AIProvider['chat']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
+  logVision: (messages: VisionMessage[], opts: Parameters<AIProvider['chatVision']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
 }): Promise<PipelineResult> {
-  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
+  const { bookId, pageFrom, pageTo, provider, vlmModel, detailInstruction, pdfData, format, signal, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, logVision } = opts;
 
   onProgress?.('Визуальный анализ страниц...', 10);
   const allExtractedIdeas: LLMExtractedIdea[] = [];
@@ -339,9 +429,11 @@ async function runVlmPipeline(opts: {
         extractIdeasUserVision(p),
       );
 
-      const response = await provider.chatVision(
+      const response = await logVision(
         [{ role: 'system', content: EXTRACT_IDEAS_SYSTEM + '\n\n' + detailInstruction }, visionMsg],
         { model: vlmModel, fallbackModels, jsonMode: true },
+        'extraction',
+        `VLM стр. ${p}`,
       );
 
       const parsed = parseIdeasResponse(response.content, [p, p]);
@@ -373,8 +465,9 @@ async function finalizeIdeas(opts: {
   fallbackModels?: string[];
   requestDelayMs?: number;
   relationsChunkSize: number;
+  log?: (messages: ChatMessage[], opts: Parameters<AIProvider['chat']>[1], phase: LLMLogEntry['phase'], label: string) => Promise<import('../background/ai-client.js').ChatResponse>;
 }): Promise<PipelineResult> {
-  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize } = opts;
+  const { bookId, allExtractedIdeas, provider, model, pageFrom, pageTo, onProgress, qualityReport, fallbackModels, requestDelayMs, relationsChunkSize, log } = opts;
 
   onProgress?.('Дедупликация идей...', 85);
   const uniqueIdeas = deduplicateIdeas(allExtractedIdeas);
@@ -447,7 +540,9 @@ async function finalizeIdeas(opts: {
       ];
 
       try {
-        const relResponse = await provider.chat(relMessages, { model, fallbackModels, jsonMode: true });
+        const relLabel = `Связи: чанк ${ci + 1}/${totalChunks} (${contextIdeas.length} идей)`;
+        const chatFn = log || ((msgs: ChatMessage[], o: Parameters<AIProvider['chat']>[1]) => provider.chat(msgs, o));
+        const relResponse = await chatFn(relMessages, { model, fallbackModels, jsonMode: true }, 'relations', relLabel);
         const chunkRelations = parseRelationsResponse(
           relResponse.content,
           ideas.map((i) => i.id),
