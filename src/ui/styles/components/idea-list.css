@@ -109,12 +109,12 @@
   color: #fca5a5;
 }
 
-.idea-importance,
-.idea-star-rating {
+.idea-importance {
   margin-left: auto;
 }
 
 .idea-star-rating {
+  margin-left: auto;
   display: inline-flex;
   gap: 1px;
   cursor: pointer;
@@ -814,4 +814,139 @@
   border-radius: 3px;
   font-family: 'DejaVu Sans Mono', 'Consolas', monospace;
   font-size: 0.9em;
+}
+
+/* ============================================================
+   Idea Inline Editing
+   ============================================================ */
+
+.btn-edit-idea {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.btn-edit-idea:hover {
+  background: var(--accent-light, rgba(59, 130, 246, 0.1));
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
+
+.btn-edit-idea:active {
+  transform: scale(0.95);
+}
+
+.idea-card.editing .idea-content-fields {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin: 0 -4px;
+}
+
+.idea-edit-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: var(--radius-sm);
+  font-size: inherit;
+  font-family: inherit;
+  resize: vertical;
+  line-height: 1.5;
+  box-shadow: 0 0 0 3px var(--accent-light, rgba(59, 130, 246, 0.1));
+}
+
+.idea-edit-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light, rgba(59, 130, 246, 0.2));
+}
+
+.idea-edit-title {
+  font-size: 17px;
+  font-weight: 600;
+  min-height: 28px;
+  margin-bottom: 6px;
+}
+
+.idea-edit-summary {
+  font-size: 14px;
+  min-height: 60px;
+  margin-bottom: 10px;
+}
+
+.idea-edit-quote {
+  font-size: 13px;
+  font-style: italic;
+  min-height: 40px;
+  margin: 10px 0;
+}
+
+.idea-edit-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  animation: toolbar-appear 0.15s ease;
+}
+
+@keyframes toolbar-appear {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.btn-save-edit,
+.btn-cancel-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.btn-save-edit {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border-color: var(--accent, #3b82f6);
+}
+
+.btn-save-edit:hover {
+  opacity: 0.9;
+  transform: scale(1.02);
+}
+
+.btn-save-edit:active {
+  transform: scale(0.97);
+}
+
+.btn-cancel-edit {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.btn-cancel-edit:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.btn-cancel-edit:active {
+  transform: scale(0.97);
 }

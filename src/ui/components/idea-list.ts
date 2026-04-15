@@ -131,11 +131,18 @@ export class IdeaListView {
           <span class="idea-star-rating" data-idea-id="${i.id}">
             ${[1,2,3,4,5].map(s => `<span class="star-btn${s <= i.importance ? ' star-filled' : ''}" data-star="${s}">&#9733;</span>`).join('')}
           </span>
+          <button class="btn-edit-idea" data-idea-id="${i.id}" title="Редактировать текст идеи">✎</button>
         </div>
         ${tocBreadcrumb}
-        <h3 class="idea-title">${this.renderMarkdown(i.title, false)}</h3>
-        <p class="idea-summary">${this.renderMarkdown(i.summary, false)}</p>
-        ${i.quote ? `<blockquote class="idea-quote">${this.renderMarkdown(i.quote, false)}</blockquote>` : ''}
+        <div class="idea-content-fields" data-edit-idea-id="${i.id}">
+          <h3 class="idea-title idea-editable-field" data-field="title">${this.renderMarkdown(i.title, false)}</h3>
+          <p class="idea-summary idea-editable-field" data-field="summary">${this.renderMarkdown(i.summary, false)}</p>
+          ${i.quote ? `<blockquote class="idea-quote idea-editable-field" data-field="quote">${this.renderMarkdown(i.quote, false)}</blockquote>` : ''}
+        </div>
+        <div class="idea-edit-toolbar" id="edit-toolbar-${i.id}" style="display:none">
+          <button class="btn-save-edit" data-idea-id="${i.id}">✓ Сохранить</button>
+          <button class="btn-cancel-edit" data-idea-id="${i.id}">✕ Отмена</button>
+        </div>
         <div class="idea-meta">
           <span>стр. ${i.pages.join(', ')}</span>
             ${i.relations.length ? `<span class="relations-badge">${i.relations.length} связей</span>` : ''}
@@ -404,6 +411,42 @@ export class IdeaListView {
         }
 
         el.classList.remove('btn-zathura-loading');
+      });
+    });
+
+    // Edit idea buttons — toggle inline editing
+    this.container.querySelectorAll('.btn-edit-idea').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ideaId = (btn as HTMLElement).dataset.ideaId;
+        if (!ideaId) return;
+        const card = btn.closest('.idea-card') as HTMLElement | null;
+        if (!card) return;
+        this.toggleEditMode(card, ideaId, true);
+      });
+    });
+
+    // Save edit buttons
+    this.container.querySelectorAll('.btn-save-edit').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ideaId = (btn as HTMLElement).dataset.ideaId;
+        if (!ideaId) return;
+        const card = btn.closest('.idea-card') as HTMLElement | null;
+        if (!card) return;
+        await this.saveEdit(card, ideaId);
+        this.toggleEditMode(card, ideaId, false);
+      });
+    });
+
+    // Cancel edit buttons
+    this.container.querySelectorAll('.btn-cancel-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ideaId = (btn as HTMLElement).dataset.ideaId;
+        if (!ideaId) return;
+        const card = btn.closest('.idea-card') as HTMLElement | null;
+        if (!card) return;
+        // Restore original content from data attributes
+        this.cancelEdit(card, ideaId);
+        this.toggleEditMode(card, ideaId, false);
       });
     });
 
@@ -796,6 +839,109 @@ export class IdeaListView {
     }
 
     return result;
+  }
+
+  /**
+   * Toggle inline editing mode for an idea card.
+   * When enabling: replace rendered HTML with textareas pre-filled with raw text.
+   * When disabling: restore the rendered view (after save or cancel).
+   */
+  private toggleEditMode(card: HTMLElement, ideaId: string, enable: boolean): void {
+    const fields = card.querySelector('.idea-content-fields') as HTMLElement | null;
+    const toolbar = document.getElementById(`edit-toolbar-${ideaId}`);
+    const editBtn = card.querySelector('.btn-edit-idea') as HTMLElement | null;
+    if (!fields || !toolbar) return;
+
+    if (enable) {
+      // Store original raw text in data attributes (for cancel)
+      const editables = fields.querySelectorAll('.idea-editable-field');
+      editables.forEach(el => {
+        const field = (el as HTMLElement).dataset.field;
+        const currentText = (el as HTMLElement).dataset.originalText || (el as HTMLElement).textContent || '';
+        if (!field) return;
+        (el as HTMLElement).dataset.originalText = currentText;
+        (el as HTMLElement).dataset.originalHtml = el.innerHTML;
+
+        const isTitle = field === 'title';
+        const textarea = document.createElement('textarea');
+        textarea.className = `idea-edit-textarea idea-edit-${field}`;
+        textarea.value = currentText;
+        textarea.dataset.field = field;
+        textarea.placeholder = isTitle ? 'Заголовок идеи...' : (field === 'summary' ? 'Описание идеи...' : 'Цитата из книги...');
+        // Prevent parent keydown handlers from eating keys
+        textarea.addEventListener('keydown', (e) => e.stopPropagation());
+        // Ctrl+Enter to save
+        textarea.addEventListener('keydown', (e: KeyboardEvent) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            const saveBtn = card.querySelector('.btn-save-edit') as HTMLElement | null;
+            if (saveBtn) saveBtn.click();
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            const cancelBtn = card.querySelector('.btn-cancel-edit') as HTMLElement | null;
+            if (cancelBtn) cancelBtn.click();
+          }
+        });
+        // Auto-resize title textarea
+        if (isTitle) {
+          textarea.style.minHeight = 'auto';
+          textarea.style.height = 'auto';
+          textarea.style.height = textarea.scrollHeight + 'px';
+          textarea.addEventListener('input', () => {
+            textarea.style.height = 'auto';
+            textarea.style.height = textarea.scrollHeight + 'px';
+          });
+        }
+
+        el.innerHTML = '';
+        el.appendChild(textarea);
+      });
+
+      toolbar.style.display = 'flex';
+      if (editBtn) editBtn.style.display = 'none';
+      card.classList.add('editing');
+      // Focus first textarea
+      const firstTa = fields.querySelector('.idea-edit-textarea') as HTMLTextAreaElement | null;
+      if (firstTa) firstTa.focus();
+    } else {
+      // Will be re-rendered by saveEdit → rerender, or by cancelEdit + rerender
+    }
+  }
+
+  /**
+   * Save edited fields to IndexedDB and re-render the card.
+   */
+  private async saveEdit(card: HTMLElement, ideaId: string): Promise<void> {
+    const fields = card.querySelector('.idea-content-fields') as HTMLElement | null;
+    if (!fields) return;
+
+    const updates: Partial<Idea> = {};
+    const editables = fields.querySelectorAll('.idea-edit-textarea');
+    editables.forEach(ta => {
+      const field = (ta as HTMLElement).dataset.field as 'title' | 'summary' | 'quote';
+      const value = (ta as HTMLTextAreaElement).value.trim();
+      if (field && value) {
+        updates[field] = value;
+      } else if (field === 'quote' && value === '') {
+        updates.quote = undefined;
+      }
+    });
+
+    if (Object.keys(updates).length > 0) {
+      await db.ideas.update(ideaId, updates);
+      // Clear cached system prompt since idea content changed
+      this.chatSystemPrompts.delete(ideaId);
+    }
+    this.render();
+  }
+
+  /**
+   * Cancel editing — restore original content and re-render.
+   */
+  private cancelEdit(card: HTMLElement, ideaId: string): void {
+    // Simply re-render to restore original state
+    this.render();
   }
 
   /** Escape for HTML attribute values (single-quote safe) */
