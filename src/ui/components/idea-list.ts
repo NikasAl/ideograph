@@ -74,6 +74,9 @@ export class IdeaListView {
         </select>`
       : '';
 
+    // Preserve analysis panel across re-renders (filters, toggles, stars, ideas-updated)
+    const existingPanel = this.container.querySelector('.analysis-panel');
+
     this.container.innerHTML = `
       <div class="idea-list-view">
         <div class="view-header">
@@ -115,6 +118,12 @@ export class IdeaListView {
           ` : ideas.map((i) => this.card(i, tocPaths.get(i.id) || null, ideasWithChats.has(i.id))).join('')}
         </div>
       </div>`;
+
+    // Re-attach preserved analysis panel before the idea list
+    if (existingPanel) {
+      const listView = this.container.querySelector('.idea-list-view');
+      if (listView) listView.before(existingPanel);
+    }
 
     this.bind();
   }
