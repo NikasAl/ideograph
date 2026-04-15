@@ -135,9 +135,9 @@ export class IdeaListView {
         </div>
         ${tocBreadcrumb}
         <div class="idea-content-fields" data-edit-idea-id="${i.id}">
-          <h3 class="idea-title idea-editable-field" data-field="title">${this.renderMarkdown(i.title, false)}</h3>
-          <p class="idea-summary idea-editable-field" data-field="summary">${this.renderMarkdown(i.summary, false)}</p>
-          ${i.quote ? `<blockquote class="idea-quote idea-editable-field" data-field="quote">${this.renderMarkdown(i.quote, false)}</blockquote>` : ''}
+          <h3 class="idea-title idea-editable-field" data-field="title" data-original-text="${this.escAttr(i.title.trim())}">${this.renderMarkdown(i.title, false)}</h3>
+          <p class="idea-summary idea-editable-field" data-field="summary" data-original-text="${this.escAttr(i.summary)}">${this.renderMarkdown(i.summary, false)}</p>
+          ${i.quote ? `<blockquote class="idea-quote idea-editable-field" data-field="quote" data-original-text="${this.escAttr(i.quote)}">${this.renderMarkdown(i.quote, false)}</blockquote>` : ''}
         </div>
         <div class="idea-edit-toolbar" id="edit-toolbar-${i.id}" style="display:none">
           <button class="btn-save-edit" data-idea-id="${i.id}">✓ Сохранить</button>
@@ -857,7 +857,8 @@ export class IdeaListView {
       const editables = fields.querySelectorAll('.idea-editable-field');
       editables.forEach(el => {
         const field = (el as HTMLElement).dataset.field;
-        const currentText = (el as HTMLElement).dataset.originalText || (el as HTMLElement).textContent || '';
+        // Prefer data-original-text set in template (raw text before markdown rendering)
+        const currentText = ((el as HTMLElement).dataset.originalText || (el as HTMLElement).textContent || '').trim();
         if (!field) return;
         (el as HTMLElement).dataset.originalText = currentText;
         (el as HTMLElement).dataset.originalHtml = el.innerHTML;

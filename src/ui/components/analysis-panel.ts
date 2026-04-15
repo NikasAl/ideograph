@@ -414,11 +414,12 @@ export class AnalysisPanel {
       const effectiveMode = EXTRACTION_MODES.find((m) => m.mode === result.mode)?.label || result.mode;
       progressText.textContent = `Готово! ${result.ideas.length} идей, ${result.relations.length} связей. Режим: ${effectiveMode}`;
 
-      setTimeout(() => {
-        document.dispatchEvent(new CustomEvent('ideas-updated'));
-        this.pdfData = null;
-        panel.remove();
-      }, 1500);
+      document.dispatchEvent(new CustomEvent('ideas-updated'));
+      this.pdfData = null;
+      // Keep panel open so user can review log — user closes via ✕ button
+      (panel.querySelector('#btn-cancel') as HTMLElement).style.display = 'none';
+      // Show "Готово" indicator and allow re-run or close
+      (panel.querySelector('#btn-start') as HTMLElement).style.display = 'inline-block';
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         progressText.textContent = 'Отменено.';
