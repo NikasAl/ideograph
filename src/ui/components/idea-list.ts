@@ -8,6 +8,7 @@ import type { ChatMessage } from '../../background/ai-client.js';
 import { createProvider, parseFallbackModels } from '../../background/ai-client.js';
 import { assignChapterIds } from '../../extraction/toc-extractor.js';
 import { AnalysisPanel } from './analysis-panel.js';
+import { FlashcardView } from './flashcard-view.js';
 import { openInZathura, isNativeHostAvailable } from '../utils/native-messaging.js';
 import katex from 'katex';
 import { marked } from 'marked';
@@ -81,7 +82,10 @@ export class IdeaListView {
       <div class="idea-list-view">
         <div class="view-header">
           <h2>✦ Идеи: ${book ? this.esc(book.title) : ''}</h2>
-          <button class="primary-btn" id="btn-analyze">Анализировать</button>
+          <div class="view-header-actions">
+            <button class="secondary-btn" id="btn-flashcard" title="Режим карточек для запоминания">◁ Карточки</button>
+            <button class="primary-btn" id="btn-analyze">Анализировать</button>
+          </div>
         </div>
         <div class="filters-bar">
           <select id="filter-fam" class="filter-select">
@@ -331,6 +335,17 @@ export class IdeaListView {
 
     document.getElementById('btn-analyze')?.addEventListener('click', () => {
       new AnalysisPanel(this.container, this.bookId).render();
+    });
+
+    // Flashcard mode — open with current filters pre-selected
+    document.getElementById('btn-flashcard')?.addEventListener('click', () => {
+      new FlashcardView(this.container, {
+        bookId: this.bookId,
+        filterStatus: this.filters.status,
+        filterFamiliarity: this.filters.familiarity,
+        filterType: this.filters.type,
+        filterChapter: this.filters.chapter,
+      }).render();
     });
 
     // Zathura buttons — launch via Native Messaging Host or fallback to clipboard

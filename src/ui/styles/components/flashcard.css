@@ -1,0 +1,554 @@
+/* ============================================================
+   Flashcard View — full-screen idea review mode
+   ============================================================ */
+
+/* Setup screen */
+.flashcard-setup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - var(--header-height) - 48px);
+  animation: fc-fade-in 0.25s ease;
+}
+
+@keyframes fc-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.flashcard-setup-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  padding: 36px 40px;
+  max-width: 560px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+}
+
+.flashcard-setup-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.flashcard-setup-header h2 {
+  font-size: 22px;
+  flex: 1;
+}
+
+.flashcard-count-badge {
+  padding: 4px 14px;
+  background: var(--accent-light);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.flashcard-setup-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.flashcard-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.fc-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fc-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fc-filter-select {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.flashcard-preview {
+  text-align: center;
+  padding: 12px 0;
+  margin-bottom: 20px;
+}
+
+.fc-preview-count {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fc-preview-empty {
+  color: var(--danger);
+}
+
+.flashcard-start-btn {
+  display: block;
+  width: 100%;
+  padding: 14px 0;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ─── Main flashcard view ──────────────────────────────── */
+
+.flashcard-view {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--header-height) - 48px);
+  animation: fc-fade-in 0.2s ease;
+}
+
+/* Top bar */
+.flashcard-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.flashcard-back-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.flashcard-back-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.flashcard-progress-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.flashcard-progress-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.flashcard-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #10b981);
+  border-radius: 4px;
+  transition: width 0.4s ease;
+  min-width: 2%;
+}
+
+.flashcard-progress-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.flashcard-counter {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Card ─────────────────────────────────────────────── */
+
+.flashcard-card {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: 5px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  padding: 32px 36px;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
+  transition: border-left-color 0.3s ease;
+}
+
+.flashcard-card.status-unseen    { border-left-color: #6B7280; }
+.flashcard-card.status-progress  { border-left-color: #D97706; }
+.flashcard-card.status-mastered  { border-left-color: #059669; }
+.flashcard-card.status-applied   { border-left-color: #2563EB; }
+.flashcard-card.status-confused  { border-left-color: #DC2626; }
+
+.fc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fc-type-badge {
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fc-type-definition { background: #dbeafe; color: #1d4ed8; }
+.fc-type-method    { background: #fef3c7; color: #92400e; }
+.fc-type-theorem   { background: #f3e8ff; color: #7c3aed; }
+.fc-type-insight   { background: #dcfce7; color: #166534; }
+.fc-type-example   { background: #e0e7ff; color: #3730a3; }
+.fc-type-analogy   { background: #fce7f3; color: #9d174d; }
+
+[data-theme="dark"] .fc-type-definition { background: #1e3a5f; color: #93c5fd; }
+[data-theme="dark"] .fc-type-method    { background: #451a03; color: #fcd34d; }
+[data-theme="dark"] .fc-type-theorem   { background: #3b0764; color: #c4b5fd; }
+[data-theme="dark"] .fc-type-insight   { background: #14532d; color: #86efac; }
+[data-theme="dark"] .fc-type-example   { background: #312e81; color: #a5b4fc; }
+[data-theme="dark"] .fc-type-analogy   { background: #500724; color: #f9a8d4; }
+
+.fc-depth-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fc-depth-badge.depth-basic    { background: #dcfce7; color: #166534; }
+.fc-depth-badge.depth-medium   { background: #fef3c7; color: #92400e; }
+.fc-depth-badge.depth-advanced { background: #fee2e2; color: #991b1b; }
+
+[data-theme="dark"] .fc-depth-badge.depth-basic    { background: #14532d; color: #86efac; }
+[data-theme="dark"] .fc-depth-badge.depth-medium   { background: #451a03; color: #fcd34d; }
+[data-theme="dark"] .fc-depth-badge.depth-advanced { background: #450a0a; color: #fca5a5; }
+
+.fc-stars {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 1px;
+  user-select: none;
+}
+
+.fc-star {
+  font-size: 18px;
+  color: var(--border-color, #d1d5db);
+  line-height: 1;
+}
+
+.fc-star.fc-star-filled {
+  color: #f59e0b;
+}
+
+.fc-toc-path {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ─── Title and Summary — LARGE ────────────────────────── */
+
+.fc-title {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+
+.fc-title .katex { font-size: 1.1em; }
+
+.fc-summary {
+  font-size: 18px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.fc-summary .katex { font-size: 1em; }
+
+.fc-quote {
+  border-left: 4px solid var(--border-color);
+  padding: 14px 20px;
+  margin: 16px 0 20px;
+  background: var(--bg-secondary);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-style: italic;
+  font-size: 16px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.fc-relations {
+  margin-bottom: 16px;
+}
+
+.fc-rel-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ─── Meta row ─────────────────────────────────────────── */
+
+.fc-meta-row {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.fc-pages {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-btn {
+  font-size: 12px;
+}
+
+.fc-context-container {
+  overflow: hidden;
+  animation: context-expand 0.25s ease;
+}
+
+.fc-context-container.fc-context-visible {
+  margin-bottom: 12px;
+}
+
+/* ─── Sections (Notes, Chat) ───────────────────────────── */
+
+.fc-notes-section,
+.fc-chat-section {
+  margin-top: 12px;
+}
+
+.fc-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-light);
+}
+
+.fc-section-toggle:hover {
+  opacity: 0.85;
+}
+
+.fc-toggle-icon {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.fc-section-toggle label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.fc-has-content {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.fc-section-body {
+  margin-top: 8px;
+}
+
+.fc-notes-textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.fc-notes-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+/* ─── Status action buttons ────────────────────────────── */
+
+.flashcard-actions {
+  display: flex;
+  gap: 8px;
+  padding: 16px 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.fc-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: 2px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.fc-action-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.fc-action-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.fc-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
+.fc-action-btn.fc-action-unseen    { border-color: #6B7280; }
+.fc-action-btn.fc-action-unseen:hover:not(:disabled) { background: #6B7280; color: #fff; }
+
+.fc-action-btn.fc-action-in_progress { border-color: #D97706; }
+.fc-action-btn.fc-action-in_progress:hover:not(:disabled) { background: #D97706; color: #fff; }
+
+.fc-action-btn.fc-action-mastered  { border-color: #059669; }
+.fc-action-btn.fc-action-mastered:hover:not(:disabled) { background: #059669; color: #fff; }
+
+.fc-action-btn.fc-action-applied   { border-color: #2563EB; }
+.fc-action-btn.fc-action-applied:hover:not(:disabled) { background: #2563EB; color: #fff; }
+
+.fc-action-btn.fc-action-confused  { border-color: #DC2626; }
+.fc-action-btn.fc-action-confused:hover:not(:disabled) { background: #DC2626; color: #fff; }
+
+.fc-action-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ─── Navigation ───────────────────────────────────────── */
+
+.flashcard-nav {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.fc-nav-btn {
+  padding: 8px 24px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.fc-nav-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.fc-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ─── Complete screen ──────────────────────────────────── */
+
+.flashcard-complete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - var(--header-height) - 48px);
+  animation: fc-fade-in 0.3s ease;
+}
+
+.flashcard-complete-card {
+  text-align: center;
+  padding: 48px;
+}
+
+.fc-complete-icon {
+  font-size: 56px;
+  margin-bottom: 16px;
+  color: var(--accent);
+  animation: fc-complete-pop 0.4s ease;
+}
+
+@keyframes fc-complete-pop {
+  0%   { transform: scale(0.5); opacity: 0; }
+  60%  { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.flashcard-complete-card h2 {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.fc-complete-stats {
+  font-size: 16px;
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.fc-complete-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}

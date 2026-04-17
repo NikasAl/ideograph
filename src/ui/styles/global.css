@@ -314,6 +314,12 @@ body {
   font-weight: 700;
 }
 
+.view-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .view-description {
   color: var(--text-secondary);
   font-size: 14px;
